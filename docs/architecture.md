@@ -193,7 +193,13 @@ consuming goroutine.
 - **`-race` on every package, in CI**, on every push.
 - **Leak checks** on streaming, because a leaked goroutine per request is the
   kind of bug that only shows up in production at 3am.
-- Live integration tests exist, are build-tagged `integration`, and never run
-  in CI by default because they cost money and require real keys.
+- **No adapter has yet been exercised against a live provider.** Every adapter
+  test replays payloads written from provider documentation, so it verifies
+  skyl's *mapping* logic but cannot catch a wire-format detail we got wrong —
+  a fake echoes our own assumptions back at us. Closing that gap is the
+  headline item in M6; until it is closed, treat the adapters as unvalidated
+  against production APIs.
+- Live integration tests, when they land, will be build-tagged `integration`
+  and excluded from default CI, because they cost money and need real keys.
 
 See [rules.md](rules.md) for the full standard.

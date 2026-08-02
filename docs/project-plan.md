@@ -62,6 +62,11 @@ The provider-agnostic types and the client that drives them.
 
 ### M6 — Hardening (next)
 
+- [ ] **Validate every adapter against a live provider API.** Nothing has been
+      run against a real endpoint yet — all adapter tests replay hand-written
+      payloads, which verifies mapping logic but cannot catch a wire-format
+      detail we got wrong. This is the gate on calling skyl production-ready.
+- [ ] Build-tagged `integration` test suite covering that validation
 - [ ] `provider/cohere` — needs its own adapter, non-OpenAI wire format
 - [ ] AWS Bedrock, Azure OpenAI, Vertex AI adapters
 - [ ] Generated model registry with context window / pricing / modality
