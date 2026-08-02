@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  build:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One job per module. The split is the point of the layout: the core
+        # library must keep building without the gateway's or Anthropic SDK's
+        # dependencies. See docs/adr/0001-two-module-layout.md.
+        module:
+          - "."
+          - "provider/anthropic"
+          - "gateway"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: gofmt
+        working-directory: ${{ matrix.module }}
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: go vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: go test (race)
+        working-directory: ${{ matrix.module }}
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: coverage summary
+        working-directory: ${{ matrix.module }}
+        run: go tool cover -func=coverage.out | tail -1
+
+  tidy:
+    name: go.mod is tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: verify tidy
+        run: |
+          for mod in . provider/anthropic gateway; do
+            echo "==> $mod"
+            (cd "$mod" && go mod tidy)
+          done
+          if ! git diff --exit-code -- '**/go.mod' '**/go.sum' go.mod go.sum; then
+            echo "::error::go.mod/go.sum are not tidy; run 'go mod tidy' in each module"
+            exit 1
+          fi
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [".", "provider/anthropic", "gateway"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: ${{ matrix.module }}
+          args: --timeout=5m

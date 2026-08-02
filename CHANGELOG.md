@@ -1,0 +1,73 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
+project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Until v1.0.0, breaking changes may land in minor releases. They will always be
+listed here with a migration note.
+
+## [Unreleased]
+
+The initial build of skyl: the repository previously held an unrelated Go
+to-do application, which remains archived on the `master` branch.
+
+### Added
+
+**Core library** (`github.com/BAGOMBEKA-JOB-DEV/skyl`)
+
+- `Provider` interface — `Name`, `Complete`, `Stream`, `Models`
+- `Client` wrapping any provider with validation, retry, timeouts, and hooks
+- Conversation model: `Message` with typed `Part`s — `Text`, `Image`,
+  `ToolCall`, `ToolResult`
+- `Request` / `Response` / `Usage` / `StopReason`, with `ProviderOptions` and
+  `Response.Raw` as escape hatches
+- Typed error classification: `ErrAuth`, `ErrRateLimit`, `ErrNotFound`,
+  `ErrBadRequest`, `ErrServer`, `ErrUnsupported`, `ErrRefusal`, carried on
+  `*Error` with provider, status, and retry-after
+- Exponential backoff with full jitter, honouring `Retry-After`; only rate
+  limits, server errors, and connection failures are retried
+- `Stream` pull iterator with leak-free cancellation and early `Close()`
+- Internal SSE reader
+
+**Providers**
+
+- `provider/anthropic` — Claude, native; a **separate module** built on the
+  official Anthropic SDK, so its dependencies stay off everyone else's graph
+- `provider/openai` — GPT, native
+- `provider/gemini` — Gemini, native
+- `provider/openaicompat` — generic adapter reaching ~18 OpenAI-compatible
+  hosts including xAI, DeepSeek, Mistral, Groq, Together, Fireworks,
+  OpenRouter, Ollama, vLLM, and LM Studio
+
+**Gateway** (`github.com/BAGOMBEKA-JOB-DEV/skyl/gateway`, separate module)
+
+- chi v5 router: `POST /v1/chat`, `POST /v1/chat/stream` (SSE),
+  `GET /v1/models`, `GET /v1/providers`, `GET /healthz`
+- Mandatory bearer auth with constant-time comparison; the server refuses to
+  start without a token
+- Request ID, real IP, panic recovery, structured `log/slog` logging, timeouts
+- Provider registration from environment variables
+
+**Documentation**
+
+- `docs/`: idea, architecture, getting-started, providers, gateway,
+  project plan, engineering rules
+- ADRs 0001–0006 recording the load-bearing decisions
+- `CONTRIBUTING.md`, `SECURITY.md`
+
+### Notes
+
+- **Model IDs are opaque pass-through strings.** skyl ships no model-name
+  constants and never validates a model against a list, so models released
+  after your skyl build work immediately.
+  ([ADR-0004](docs/adr/0004-model-ids-are-pass-through.md))
+- **There is no GitHub Copilot provider.** Copilot exposes no completions API;
+  a provider package could only be a relabelled call to another vendor.
+  ([ADR-0005](docs/adr/0005-no-copilot-provider.md))
+- **chi is used in the gateway module only.** Importing the core library does
+  not pull in a router.
+  ([ADR-0003](docs/adr/0003-gateway-as-separate-module.md))
+
+[Unreleased]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/commits/main
