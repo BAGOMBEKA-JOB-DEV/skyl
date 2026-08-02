@@ -114,13 +114,15 @@ func (e *Error) Unwrap() error { return e.Kind }
 // Authentication failures, malformed requests, missing models, and refusals
 // are not — retrying those burns quota to receive the same answer.
 func (e *Error) Retryable() bool {
-	switch e.Kind {
-	case ErrRateLimit, ErrServer:
+	switch {
+	case errors.Is(e.Kind, ErrRateLimit), errors.Is(e.Kind, ErrServer):
 		return true
+	case e.Kind == nil:
+		// Unclassified with no reply at all — a dial timeout, a reset
+		// connection. Worth another attempt.
+		return e.StatusCode == 0
 	default:
-		// StatusCode 0 means the request never got a reply: a dial timeout,
-		// a reset connection. Those are worth another attempt.
-		return e.StatusCode == 0 && e.Kind == nil
+		return false
 	}
 }
 

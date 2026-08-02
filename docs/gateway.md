@@ -131,11 +131,17 @@ someone else spending your money.
 The chi stack, outermost first:
 
 1. `RequestID` — correlation ID per request
-2. `RealIP` — honours `X-Forwarded-For` behind a proxy
-3. `Recoverer` — a panicking handler returns 500, not a dead process
-4. Structured request logging via `log/slog` — method, path, status, duration
+2. `Recoverer` — a panicking handler returns 500, not a dead process
+3. Structured request logging via `log/slog` — method, path, status, duration
    and request ID only; never headers, never bodies
-5. Bearer authentication (skipped only for `/healthz`)
+4. Bearer authentication (skipped only for `/healthz`)
+
+chi's `RealIP` is deliberately **not** in the stack. It rewrites
+`r.RemoteAddr` from `X-Forwarded-For` / `True-Client-IP` / `X-Real-IP`
+regardless of whether your infrastructure sets them, so any client can claim
+any address (GHSA-3fxj-6jh8-hvhx). The gateway needs no client IP, so
+`RemoteAddr` is left as the real peer address. If you need the originating IP,
+read it from a header your own trusted proxy is known to set.
 
 Upstream calls are bounded per request by `SKYL_REQUEST_TIMEOUT` inside each
 handler rather than by a router-level timeout, so a streaming response is not

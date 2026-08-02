@@ -47,7 +47,8 @@ to-do application, which remains archived on the `master` branch.
   `GET /v1/models`, `GET /v1/providers`, `GET /healthz`
 - Mandatory bearer auth with constant-time comparison; the server refuses to
   start without a token
-- Request ID, real IP, panic recovery, structured `log/slog` logging, timeouts
+- Request ID, panic recovery, structured `log/slog` logging, timeouts
+  (chi's spoofable `RealIP` is deliberately excluded)
 - Provider registration from environment variables
 
 **Documentation**
