@@ -1,0 +1,41 @@
+# Linter configuration for every skyl module.
+#
+# The selection is deliberately small: linters that catch real defects, not
+# ones that generate churn. A lint rule nobody believes in gets suppressed
+# everywhere and stops meaning anything.
+
+version: "2"
+
+linters:
+  enable:
+    - errcheck      # unchecked errors — rules.md §2.4
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose     # leaked HTTP response bodies
+    - errorlint     # %w wrapping and errors.Is/As misuse — rules.md §2.1
+    - misspell
+    - nilerr        # returning nil when err is non-nil
+    - unconvert
+    - usestdlibvars
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    staticcheck:
+      checks:
+        - all
+
+  exclusions:
+    rules:
+      # Tests legitimately ignore errors on cleanup paths and use unchecked
+      # type assertions to keep table-driven cases readable.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
