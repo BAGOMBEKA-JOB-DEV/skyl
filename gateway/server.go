@@ -105,8 +105,15 @@ func (s *Server) routes() chi.Router {
 
 	// Outermost first. Recoverer sits above the logger so a panic is still
 	// logged as a completed request rather than vanishing.
+	//
+	// chi's RealIP middleware is deliberately NOT used. It rewrites
+	// r.RemoteAddr from X-Forwarded-For / True-Client-IP / X-Real-IP whether
+	// or not the deployment actually sets them, so any client can claim any
+	// address (GHSA-3fxj-6jh8-hvhx and friends). Nothing here needs the
+	// client IP, so the safe choice is to leave RemoteAddr as the real peer
+	// address. A deployment that needs the originating IP should extract it
+	// from a header its own trusted proxy is known to set.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(s.logRequests)
 

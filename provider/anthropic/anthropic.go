@@ -91,7 +91,7 @@ func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 	}
 
 	params := sdk.MessageNewParams{
-		Model:     sdk.Model(req.Model),
+		Model:     req.Model,
 		MaxTokens: maxTokens,
 	}
 
@@ -279,7 +279,7 @@ func (p *Provider) Complete(ctx context.Context, req *skyl.Request) (*skyl.Respo
 		return nil, translateError(err)
 	}
 
-	model := string(msg.Model)
+	model := msg.Model
 	if model == "" {
 		model = req.Model
 	}

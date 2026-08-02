@@ -35,7 +35,7 @@ func TestClassifyStatus(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := ClassifyStatus(tc.status); got != tc.want {
+			if got := ClassifyStatus(tc.status); !errors.Is(got, tc.want) {
 				t.Errorf("ClassifyStatus(%d) = %v, want %v", tc.status, got, tc.want)
 			}
 		})
@@ -96,7 +96,7 @@ func TestErrorIsAndAs(t *testing.T) {
 	if !errors.As(err, &target) {
 		t.Fatal("errors.As did not recover *Error")
 	}
-	if target.Provider != "openai" || target.StatusCode != 429 {
+	if target.Provider != "openai" || target.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("recovered provider=%q status=%d, want openai/429", target.Provider, target.StatusCode)
 	}
 }
