@@ -6,6 +6,17 @@
 
 version: "2"
 
+# Build tags the linter compiles with. Without these the tagged suites are
+# invisible to it — and a file nobody lints is a file where the rules quietly
+# stop applying.
+#
+# This belongs under `run`. A top-level `build-tags` key is accepted without
+# complaint and does nothing, which looks identical to working.
+run:
+  build-tags:
+    - integration
+    - sandbox
+
 linters:
   enable:
     - errcheck      # unchecked errors — rules.md §2.4
