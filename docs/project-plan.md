@@ -40,7 +40,10 @@ The provider-agnostic types and the client that drives them.
 
 - [x] Table-driven unit tests, `httptest` fakes, no network
 - [x] Error-path coverage per adapter
-- [x] Goroutine-leak tests on streaming
+- [x] Shared adapter contract suite (`internal/providertest`) every adapter runs
+- [x] `provider/anthropic` unit + contract tests
+- [x] Goroutine-leak assertions on abandoned streams (`internal/testutil`)
+- [x] Fuzz target on the SSE reader
 - [x] `-race` clean
 
 ### M4 — Gateway ✅
@@ -56,17 +59,21 @@ The provider-agnostic types and the client that drives them.
 - [x] Build, vet, test, race across all three modules
 - [x] `gofmt` and `go mod tidy` enforcement
 - [x] `golangci-lint` config
-- [x] Coverage reported per module
-- [ ] A coverage floor that fails the build
+- [x] Per-module coverage floors that fail the build
+- [x] `go vet -tags=integration`, so the live tests cannot rot uncompiled
+- [x] Scheduled weekly fuzz workflow, with crashers uploaded as artifacts
 - [ ] Scheduled model-registry refresh job
 
 ### M6 — Hardening (next)
 
-- [ ] **Validate every adapter against a live provider API.** Nothing has been
-      run against a real endpoint yet — all adapter tests replay hand-written
-      payloads, which verifies mapping logic but cannot catch a wire-format
-      detail we got wrong. This is the gate on calling skyl production-ready.
-- [ ] Build-tagged `integration` test suite covering that validation
+- [x] Build-tagged `integration` suite covering live calls, streaming, model
+      discovery, and error classification for every adapter
+- [ ] **Actually run it against real provider APIs.** The harness exists and
+      compiles in CI, but no adapter has yet been exercised against a real
+      endpoint — that needs credentials. Until someone runs
+      `go test -tags=integration ./...` with real keys and it passes, the
+      adapters remain unvalidated against production APIs. This is the gate on
+      calling skyl production-ready.
 - [ ] `provider/cohere` — needs its own adapter, non-OpenAI wire format
 - [ ] AWS Bedrock, Azure OpenAI, Vertex AI adapters
 - [ ] Generated model registry with context window / pricing / modality
