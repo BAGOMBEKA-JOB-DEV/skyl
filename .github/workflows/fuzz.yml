@@ -1,0 +1,55 @@
+name: Fuzz
+
+# Fuzzing runs on a schedule rather than per-PR, deliberately.
+#
+# A fuzzer explores new inputs on every run, so a failure can appear on a pull
+# request that had nothing to do with it. That is a real bug worth finding, but
+# blocking an unrelated change on it makes the signal read as flakiness — and a
+# check people learn to re-run is a check that no longer means anything. The
+# seed corpus still runs on every PR as ordinary unit tests via `go test`.
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays, 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "How long to fuzz each target"
+        required: false
+        default: "5m"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: FuzzReader
+            package: ./internal/sse/
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: fuzz
+        run: |
+          go test -run="^${{ matrix.target }}$" -fuzz="^${{ matrix.target }}$" \
+            -fuzztime="${{ github.event.inputs.duration || '5m' }}" ${{ matrix.package }}
+
+      # A crasher is written into testdata/fuzz/. Uploading it means the input
+      # that broke the parser is one download away instead of lost with the
+      # runner.
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: internal/sse/testdata/fuzz/
+          if-no-files-found: ignore

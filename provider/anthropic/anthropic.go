@@ -121,14 +121,17 @@ func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 	if len(req.Tools) > 0 {
 		tools := make([]sdk.ToolUnionParam, 0, len(req.Tools))
 		for _, t := range req.Tools {
-			schema := sdk.ToolInputSchemaParam{}
+			// Properties is set unconditionally. ToolInputSchemaParam omits
+			// itself when every field is zero, which would drop input_schema
+			// from the request — and the API rejects a tool without one. An
+			// empty object is the correct schema for a tool taking no
+			// arguments, so this is the right value rather than a filler.
+			schema := sdk.ToolInputSchemaParam{Properties: map[string]any{}}
 			if t.Parameters != nil {
-				if props, ok := t.Parameters["properties"]; ok {
+				if props, ok := t.Parameters["properties"]; ok && props != nil {
 					schema.Properties = props
 				}
-				if req, ok := t.Parameters["required"].([]string); ok {
-					schema.Required = req
-				}
+				schema.Required = requiredNames(t.Parameters["required"])
 			}
 			tool := sdk.ToolParam{Name: t.Name, InputSchema: schema}
 			if t.Description != "" {
@@ -167,6 +170,29 @@ func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 	}
 
 	return params, nil
+}
+
+// requiredNames extracts a JSON Schema "required" list.
+//
+// It accepts both []string and []any because a schema written as a Go literal
+// yields the former while one produced by json.Unmarshal yields the latter.
+// Handling only []string silently dropped the required list for every caller
+// who loaded their schema from a file.
+func requiredNames(v any) []string {
+	switch names := v.(type) {
+	case []string:
+		return names
+	case []any:
+		out := make([]string, 0, len(names))
+		for _, n := range names {
+			if s, ok := n.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func convertMessage(idx int, m skyl.Message) (sdk.MessageParam, error) {
