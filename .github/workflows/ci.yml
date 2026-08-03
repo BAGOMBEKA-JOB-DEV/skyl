@@ -31,11 +31,11 @@ jobs:
         # coverage rises; never lower one to make a red build go green.
         include:
           - module: "."
-            min_coverage: "78"
+            min_coverage: "80"
           - module: "provider/anthropic"
-            min_coverage: "58"
+            min_coverage: "88"
           - module: "gateway"
-            min_coverage: "72"
+            min_coverage: "78"
 
     steps:
       - uses: actions/checkout@v4
@@ -67,15 +67,28 @@ jobs:
           go vet ./...
           go vet -tags=integration ./...
 
+      # -coverpkg=./... attributes coverage across package boundaries. Without
+      # it Go credits a statement only to the package whose own tests ran, so
+      # code exercised from a sibling package's test reads as 0% — internal/oai
+      # is driven almost entirely by provider/*, and internal/httpx by every
+      # adapter. The module-wide profile is the honest measure.
       - name: go test (race)
         working-directory: ${{ matrix.module }}
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -race -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: coverage floor
         working-directory: ${{ matrix.module }}
         run: |
-          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          # Test-support packages are scaffolding, not shipped behaviour. Their
+          # uncovered halves are the failure-reporting paths that only execute
+          # when a test fails, and the live-API harness that CI never runs — so
+          # measuring them reports on the test run, not on the library.
+          grep -v -E '/internal/(testutil|providertest)/' coverage.out > covered.out
+
+          total=$(go tool cover -func=covered.out | awk '/^total:/ {print $3}' | tr -d '%')
           echo "coverage: ${total}% (floor ${{ matrix.min_coverage }}%)"
+          go tool cover -func=covered.out | grep -v '^total:' | awk '$NF != "100.0%"' || true
+
           awk -v got="$total" -v min="${{ matrix.min_coverage }}" 'BEGIN {
             if (got + 0 < min + 0) {
               printf "::error::coverage %.1f%% is below the %s%% floor\n", got, min

@@ -36,9 +36,11 @@ const DefaultAddr = ":8080"
 // ConfigFromEnv builds a [Config] from the environment.
 //
 // A provider is registered for each API key present, so an operator controls
-// the provider set purely through the environment. It returns an error if no
-// provider key is set or the auth token is missing — both are misconfigurations
-// that should stop startup rather than surface as confusing 404s later.
+// the provider set purely through the environment.
+//
+// It returns an error only for values it cannot parse. The checks that stop
+// startup — no provider registered, no auth token — live in [NewServer], so
+// they apply equally to a Config built by hand.
 func ConfigFromEnv(logger *slog.Logger) (Config, error) {
 	providers := map[string]*skyl.Client{}
 
