@@ -11,6 +11,7 @@ Start with **[idea.md](idea.md)** for why skyl exists, or
 | [getting-started.md](getting-started.md) | You want working code: install, first call, streaming, tools, errors |
 | [providers.md](providers.md) | You need to know which providers and models are reachable, and how discovery works |
 | [gateway.md](gateway.md) | You want to expose skyl over HTTP |
+| [sandbox.md](sandbox.md) | You want to develop or test without credentials, or to force provider failures |
 | [architecture.md](architecture.md) | You are contributing, or want to know why it is built this way |
 | [project-plan.md](project-plan.md) | You want milestone status and what is coming |
 | [rules.md](rules.md) | You are about to open a PR |
