@@ -63,7 +63,26 @@ go vet ./...
 go test -race ./...
 ```
 
-CI runs the same commands on both modules. A red build will not be merged.
+CI runs the same commands on all three modules, plus `golangci-lint`, a
+`go mod tidy` check, and a per-module coverage floor. A red build will not be
+merged.
+
+### Live provider tests
+
+Unit tests replay payloads written from provider documentation, which proves
+the mapping is self-consistent but not that it is *correct* — a fake echoes our
+own assumptions back at us. The `integration`-tagged suite makes real calls:
+
+```bash
+export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=...
+go test -tags=integration ./provider/
+cd provider/anthropic && go test -tags=integration ./...
+```
+
+Each provider skips when its key is unset. These cost money, so they never run
+in default CI — but CI does `go vet -tags=integration` them, so they cannot rot
+uncompiled. Run them before any release, and after any change to an adapter's
+request or response mapping.
 
 ## What review will ask
 
@@ -92,7 +111,10 @@ Predictable, so you can pre-empt it:
    (the last from the *response*, not echoed from the request).
 6. Never validate model IDs — see [ADR-0004](docs/adr/0004-model-ids-are-pass-through.md).
 7. Tests against `httptest.Server` with recorded payloads. No network.
-8. Add it to [docs/providers.md](docs/providers.md) in the same PR.
+8. Run the shared contract suite — add a `providertest.Suite` entry so §6 is
+   enforced on your adapter the same as every other.
+9. Add a `providertest.Live` entry in the `integration`-tagged file.
+10. Add it to [docs/providers.md](docs/providers.md) in the same PR.
 
 **Before writing a native adapter, check whether the vendor serves OpenAI's wire
 format** — if it does, it may need only a documented base URL for

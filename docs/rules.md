@@ -60,6 +60,10 @@ string, a log line, or `Error.Body`. There is a test for this.
 **3.1 — Every exported function has a test.** No exceptions for "obvious" code;
 obvious code is where the embarrassing bugs live.
 
+**3.1a — Every adapter runs the shared contract suite** in
+`internal/providertest`. It enforces §6 uniformly, so a rule added there is
+enforced everywhere at once and no adapter can regress behind another's tests.
+
 **3.2 — Table-driven tests** with named cases. The name is printed on failure,
 so it must identify the case: `"rate limit with retry-after header"`, not
 `"case 3"`.
@@ -73,10 +77,23 @@ payload, every truncated stream. Coverage of happy paths only is theatre.
 **3.5 — `t.Parallel()` where safe**, and the suite must pass under `-race`.
 
 **3.6 — Streaming tests assert no goroutine leaks**, including on early
-`Close()` and on context cancellation mid-stream.
+`Close()` and on context cancellation mid-stream. Use
+`testutil.CheckNoGoroutineLeaks`, and take the baseline *after* any test server
+is up — otherwise you measure `net/http`, not skyl. `-race` does not catch a
+leak: a goroutine merely blocked forever is not a data race.
 
 **3.7 — Integration tests are build-tagged `integration`** and never run in
-default CI. They cost real money.
+default CI. They cost real money. CI does run `go vet -tags=integration` so
+they cannot rot uncompiled. To run them:
+
+```bash
+export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=...
+go test -tags=integration ./provider/
+cd provider/anthropic && go test -tags=integration ./...
+```
+
+Each provider skips when its key is unset, so a partial key set still runs
+what it can.
 
 **3.8 — Fix the code, not the test.** A test changed to match broken behaviour
 must be justified explicitly in the PR.

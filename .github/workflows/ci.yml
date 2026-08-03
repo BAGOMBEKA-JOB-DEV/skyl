@@ -25,10 +25,17 @@ jobs:
         # One job per module. The split is the point of the layout: the core
         # library must keep building without the gateway's or Anthropic SDK's
         # dependencies. See docs/adr/0001-two-module-layout.md.
-        module:
-          - "."
-          - "provider/anthropic"
-          - "gateway"
+        #
+        # Coverage floors sit just under the current figure, so a regression
+        # fails the build while ordinary refactoring does not. Raise them when
+        # coverage rises; never lower one to make a red build go green.
+        include:
+          - module: "."
+            min_coverage: "78"
+          - module: "provider/anthropic"
+            min_coverage: "58"
+          - module: "gateway"
+            min_coverage: "72"
 
     steps:
       - uses: actions/checkout@v4
@@ -52,17 +59,29 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go build ./...
 
-      - name: go vet
+      # The integration tests are excluded from the default build, so nothing
+      # else here would notice them failing to compile.
+      - name: go vet (including integration-tagged tests)
         working-directory: ${{ matrix.module }}
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags=integration ./...
 
       - name: go test (race)
         working-directory: ${{ matrix.module }}
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
-      - name: coverage summary
+      - name: coverage floor
         working-directory: ${{ matrix.module }}
-        run: go tool cover -func=coverage.out | tail -1
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "coverage: ${total}% (floor ${{ matrix.min_coverage }}%)"
+          awk -v got="$total" -v min="${{ matrix.min_coverage }}" 'BEGIN {
+            if (got + 0 < min + 0) {
+              printf "::error::coverage %.1f%% is below the %s%% floor\n", got, min
+              exit 1
+            }
+          }'
 
   tidy:
     name: go.mod is tidy
