@@ -127,18 +127,37 @@ Importing the core library never pulls in chi. See
 ## Status
 
 **Pre-v1, and not yet validated against live provider APIs.** Everything here
-is implemented, unit-tested, contract-tested, and CI-green — but every adapter
-test replays payloads written from provider documentation, and no adapter has
-yet made a real call. Treat it as ready to evaluate, not ready to depend on in
-production.
+is implemented, unit-tested, contract-tested, exercised end to end over real
+sockets, and CI-green — but every fake in the test suite was written from the
+same provider documentation as the adapter it tests. If a field name is wrong,
+the fake is wrong in the same way and both stay green. No adapter has yet made
+a call to a real provider. Treat it as ready to evaluate, not ready to depend
+on in production.
 
-A live test harness ships with the project and is the shortest path to closing
-that gap. It needs your own credentials:
+There are three suites, and the gap between the second and third is the whole
+story:
+
+```bash
+go test ./...                  # mapping logic, in process
+go test -tags=sandbox ./...    # the full stack over real sockets — no keys needed
+go test -tags=integration ./...# real providers — needs your keys, costs money
+```
+
+CI runs the first two on every change. Only the third can confirm the field
+names are right, and it needs your own credentials:
 
 ```bash
 export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=...
 go test -tags=integration ./provider/
 cd provider/anthropic && go test -tags=integration ./...
+```
+
+To develop against skyl before you have any key, run the local sandbox — it
+speaks all four providers' wire protocols and costs nothing. See
+[docs/sandbox.md](docs/sandbox.md).
+
+```bash
+go run ./cmd/skyl-sandbox
 ```
 
 The API may also change ahead of the v1.0.0 tag. See
