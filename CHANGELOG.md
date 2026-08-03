@@ -58,6 +58,19 @@ to-do application, which remains archived on the `master` branch.
 - ADRs 0001–0006 recording the load-bearing decisions
 - `CONTRIBUTING.md`, `SECURITY.md`
 
+### Fixed
+
+Both found by widening test coverage before the first release, so neither ever
+shipped.
+
+- `provider/anthropic` omitted `input_schema` from a tool declared without
+  parameters. The SDK's schema struct drops itself when every field is zero,
+  and the API rejects a tool without a schema — so any parameterless tool
+  failed the whole request with a 400.
+- `provider/anthropic` silently dropped a tool schema's `required` list unless
+  it was a Go `[]string`. A schema loaded from JSON yields `[]any`, so callers
+  reading their schemas from a file lost every required-argument constraint.
+
 ### Notes
 
 - **Model IDs are opaque pass-through strings.** skyl ships no model-name
