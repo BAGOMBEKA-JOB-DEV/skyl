@@ -51,6 +51,21 @@ to-do application, which remains archived on the `master` branch.
   (chi's spoofable `RealIP` is deliberately excluded)
 - Provider registration from environment variables
 
+**Sandbox** (`cmd/skyl-sandbox`)
+
+- A local server speaking all four providers' wire protocols — Anthropic
+  Messages, OpenAI chat-completions, Gemini generateContent, and the
+  OpenAI-compatible shape — with no credentials and no cost
+- Streaming, model discovery, per-provider auth headers, and per-provider error
+  shapes, so adapters behave against it as they would against the real host
+- On-demand failures: a model ID of `sandbox-status-429` returns that status,
+  which is how the retry and classification paths are exercised
+- A third test suite, `-tags=sandbox`, running the same checks as the live
+  suite over real sockets. It needs no credential, so CI runs it on every
+  change — but it cannot prove field names are correct, because the sandbox was
+  written from the same documentation as the adapters
+  ([docs/sandbox.md](docs/sandbox.md))
+
 **Documentation**
 
 - `docs/`: idea, architecture, getting-started, providers, gateway,

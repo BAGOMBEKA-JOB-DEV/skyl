@@ -59,14 +59,24 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go build ./...
 
-      # The integration tests are excluded from the default build, so nothing
-      # else here would notice them failing to compile.
-      - name: go vet (including integration-tagged tests)
+      # Tagged tests are excluded from the default build, so nothing else here
+      # would notice them failing to compile. The integration suite in
+      # particular can only be *run* with real credentials, which makes
+      # compiling it the only check CI can perform.
+      - name: go vet (including tagged tests)
         working-directory: ${{ matrix.module }}
         run: |
           go vet ./...
           go vet -tags=integration ./...
+          go vet -tags=sandbox ./...
 
+      # -tags=sandbox adds the end-to-end suite: the same checks the live suite
+      # runs against real providers, driven against a local server that speaks
+      # each provider's wire protocol. It needs no credential and costs
+      # nothing, so unlike -tags=integration it can run on every pull request —
+      # and it is the only thing here that exercises real sockets, real SSE
+      # framing, and the retry path against real status codes.
+      #
       # -coverpkg=./... attributes coverage across package boundaries. Without
       # it Go credits a statement only to the package whose own tests ran, so
       # code exercised from a sibling package's test reads as 0% — internal/oai
@@ -74,7 +84,9 @@ jobs:
       # adapter. The module-wide profile is the honest measure.
       - name: go test (race)
         working-directory: ${{ matrix.module }}
-        run: go test -race -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
+        run: |
+          go test -race -tags=sandbox -coverpkg=./... \
+            -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: coverage floor
         working-directory: ${{ matrix.module }}
