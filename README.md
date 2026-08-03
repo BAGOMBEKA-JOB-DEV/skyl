@@ -127,10 +127,21 @@ Importing the core library never pulls in chi. See
 ## Status
 
 **Pre-v1, and not yet validated against live provider APIs.** Everything here
-is implemented, unit-tested, and CI-green, but every adapter test replays
-payloads written from provider documentation — no adapter has yet made a real
-call. Treat it as ready to evaluate, not ready to depend on in production. The
-API may also change ahead of the v1.0.0 tag. See
+is implemented, unit-tested, contract-tested, and CI-green — but every adapter
+test replays payloads written from provider documentation, and no adapter has
+yet made a real call. Treat it as ready to evaluate, not ready to depend on in
+production.
+
+A live test harness ships with the project and is the shortest path to closing
+that gap. It needs your own credentials:
+
+```bash
+export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=...
+go test -tags=integration ./provider/
+cd provider/anthropic && go test -tags=integration ./...
+```
+
+The API may also change ahead of the v1.0.0 tag. See
 [docs/project-plan.md](docs/project-plan.md) for what is done and what is next,
 and [CHANGELOG.md](CHANGELOG.md) for release history.
 
