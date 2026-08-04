@@ -40,3 +40,12 @@ finished thinking.
 - [../CONTRIBUTING.md](../CONTRIBUTING.md) — how to land a change
 - [../SECURITY.md](../SECURITY.md) — vulnerability reporting, credential handling
 - [../CHANGELOG.md](../CHANGELOG.md) — release history
+
+## Evaluating skyl
+
+- [feature-matrix.md](feature-matrix.md) — what each adapter supports, and what
+  it silently ignores
+- [data-handling.md](data-handling.md) — where prompts go
+- [threat-model.md](threat-model.md) — trust boundaries and attacker capability
+- [benchmarks.md](benchmarks.md) — measured figures
+- [migrating.md](migrating.md) — moving from another library

@@ -214,7 +214,34 @@ that nothing ran the scanner. That is what has been fixed.
 **Governance.** The Apache-2.0 licence appendix has no copyright holder filled in. There
 is no CODEOWNERS, code of conduct, issue template, or DCO, and the bus factor is one.
 
-## Phase 4 — Documentation that survives an evaluation
+## Phase 4 — Documentation that survives an evaluation ✅
+
+Done. Six documents, a container image, and corrections to what was already
+there.
+
+- **[feature-matrix.md](feature-matrix.md)** — every capability × adapter, with
+  a "silently ignored" column naming fourteen cases. Publishing the gaps is the
+  differentiator, per [idea.md §3](idea.md).
+- **[data-handling.md](data-handling.md)** and
+  **[threat-model.md](threat-model.md)** — what leaves the process, what is
+  kept, what is logged, and what an authenticated gateway caller can actually
+  do. The headline: **there is no tenant isolation** — token labels are
+  attribution, not authorisation.
+- **[gateway.md](gateway.md)** — the config table listed 8 of ~19 variables and
+  the endpoint table omitted `/readyz` and `/metrics`; both corrected, plus a
+  runbook covering probes, the drain sequence, exit codes, scaling and
+  troubleshooting.
+- **`Dockerfile`, `Dockerfile.sandbox`, `compose.yaml`** — distroless, static,
+  with a CI job so they cannot rot.
+- **[benchmarks.md](benchmarks.md)** and **[migrating.md](migrating.md)**.
+
+Corrections that made the rest honest: two `request.go` doc comments described
+behaviour that did not exist; `SECURITY.md` claimed skyl never reads a
+credential file, which is true of skyl but not of the Anthropic SDK in its
+dependency graph; and two gateway config errors did not name the variable that
+was wrong.
+
+## Phase 4 — original scope
 
 The developer documentation is strong. The operator, security, and legal documentation
 does not exist.

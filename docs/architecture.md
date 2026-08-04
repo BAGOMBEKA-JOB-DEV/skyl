@@ -211,3 +211,14 @@ consuming goroutine.
   and excluded from default CI, because they cost money and need real keys.
 
 See [rules.md](rules.md) for the full standard.
+
+## See also
+
+Design rationale is here; the operational and evaluation material lives
+alongside it:
+
+- [feature-matrix.md](feature-matrix.md) — what the adapters actually do, per
+  capability, including their gaps
+- [gateway.md](gateway.md) — configuration, endpoints and the operational runbook
+- [data-handling.md](data-handling.md) and [threat-model.md](threat-model.md)
+- [benchmarks.md](benchmarks.md) — the cost of the hot paths described above

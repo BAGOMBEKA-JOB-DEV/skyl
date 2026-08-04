@@ -89,8 +89,13 @@ type Request struct {
 	// expects — a top-level field, a leading message, or systemInstruction.
 	System string
 
-	// Messages is the conversation so far. It must not be empty, and the
-	// first message must be from the user.
+	// Messages is the conversation so far. It must not be empty.
+	//
+	// skyl does not police the ordering of roles: providers disagree about
+	// what is legal — a leading assistant turn, two user turns in a row — and
+	// rejecting a shape one vendor accepts would be skyl deciding something it
+	// has no business deciding. An ordering a provider dislikes comes back as
+	// that provider's own error.
 	Messages []Message
 
 	// MaxTokens caps the response length. Zero means the provider's default,
@@ -98,8 +103,13 @@ type Request struct {
 	MaxTokens int
 
 	// Temperature and TopP are sampling controls, nil for the provider
-	// default. Several current models reject them outright; adapters drop
-	// them where they are known to be rejected.
+	// default.
+	//
+	// A non-nil value is always sent. Several current reasoning models reject
+	// these outright, and skyl does not second-guess that: silently dropping a
+	// field you set would be worse than the provider's own error, because you
+	// would have no way to tell it had happened. Leave them nil unless you
+	// mean them.
 	Temperature *float64
 	TopP        *float64
 

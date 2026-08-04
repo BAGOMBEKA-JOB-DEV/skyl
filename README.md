@@ -122,6 +122,11 @@ Importing the core library never pulls in chi. See
 | [docs/gateway.md](docs/gateway.md) | The chi HTTP gateway |
 | [docs/project-plan.md](docs/project-plan.md) | Milestones, scope, and status |
 | [docs/roadmap.md](docs/roadmap.md) | What stands between this and production use |
+| [docs/feature-matrix.md](docs/feature-matrix.md) | Which adapter supports what — including what each one silently ignores |
+| [docs/data-handling.md](docs/data-handling.md) | What leaves your process, what is kept, what is logged |
+| [docs/threat-model.md](docs/threat-model.md) | Trust boundaries, and what an authenticated gateway caller can do |
+| [docs/benchmarks.md](docs/benchmarks.md) | Measured allocation and throughput figures |
+| [docs/migrating.md](docs/migrating.md) | Coming from openai-go, anthropic-sdk-go, or langchaingo |
 | [docs/rules.md](docs/rules.md) | Engineering rules every change must satisfy |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to propose and land a change |
