@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: go.mod
 
       - name: initialise
-        uses: github/codeql-action/init@c3400c2f38909e0dcf3c3a41f2030a8217be5d3e # v3
+        uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
         with:
           languages: go
           # The default suite is what most projects run; security-extended adds
