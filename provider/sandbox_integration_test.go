@@ -28,6 +28,7 @@ import (
 	"github.com/BAGOMBEKA-JOB-DEV/skyl"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/providertest"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/sandbox"
+	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/testutil"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/gemini"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/openai"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/openaicompat"
@@ -107,7 +108,7 @@ func TestSandboxNoCredential(t *testing.T) {
 		openaicompat.WithName("local-runtime"),
 	)
 
-	resp, err := p.Complete(t.Context(), &skyl.Request{
+	resp, err := p.Complete(testutil.Context(t), &skyl.Request{
 		Model:     "gpt-5.6",
 		MaxTokens: 64,
 		Messages:  []skyl.Message{skyl.UserText("What is the capital of France?")},

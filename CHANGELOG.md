@@ -8,10 +8,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Until v1.0.0, breaking changes may land in minor releases. They will always be
 listed here with a migration note.
 
-## [Unreleased]
+## [0.1.0] — unreleased
 
-The initial build of skyl: the repository previously held an unrelated Go
-to-do application, which remains archived on the `master` branch.
+The first release. Everything below is the initial build of skyl: the repository
+previously held an unrelated Go to-do application, which remains archived on the
+`master` branch.
+
+Release mechanics live in [RELEASING.md](RELEASING.md). The order is not
+optional, and tags on the module proxy are immutable.
+
+### Supported Go versions
+
+- **Library** (`github.com/BAGOMBEKA-JOB-DEV/skyl`) — **Go 1.22+**. It has no
+  dependencies, so it imposes no toolchain of its own.
+- **`provider/anthropic` and `gateway`** — **Go 1.24+**, inherited from
+  `anthropic-sdk-go`. Since Go 1.21 the `go` directive is a hard requirement, so
+  this is not a choice; it is the floor the SDK sets.
+
+CI builds every module against its own floor, so a directive that drifts from
+what the code needs fails the build rather than reaching a user.
 
 ### Added
 
@@ -104,6 +119,15 @@ to-do application, which remains archived on the `master` branch.
 
 - `docs/roadmap.md` — what stands between this and production use, from an
   audit of the gap between "CI is green" and "a company can adopt this".
+- `RELEASING.md` and `scripts/release.sh` — the multi-module release process,
+  and a script that performs the go.mod rewrites without ever tagging or
+  pushing. CI refuses a tag whose modules still carry a `replace` directive or
+  a `v0.0.0` require: either one publishes a module nobody can install, and the
+  proxy will serve it forever.
+- `go.work` — a workspace for local development across the three modules,
+  replacing the `replace` directives. Go never consults it when skyl is a
+  dependency, so unlike a `replace` it cannot leak into a published module. CI
+  builds with `GOWORK=off` so each module is proven to resolve on its own.
 - `WithRetryAfterCap` bounds how long a provider may hold a retry.
 - The shared contract suite now asserts that every adapter honours
   `Request.ProviderOptions`, so the rule cannot be met by one adapter and
@@ -166,4 +190,4 @@ release, so neither ever shipped.
   not pull in a router.
   ([ADR-0003](docs/adr/0003-gateway-as-separate-module.md))
 
-[Unreleased]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/commits/main
+[0.1.0]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/commits/main

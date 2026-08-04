@@ -1,6 +1,6 @@
 module github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic
 
-go 1.26
+go 1.24
 
 require (
 	github.com/BAGOMBEKA-JOB-DEV/skyl v0.0.0

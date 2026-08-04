@@ -14,6 +14,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/testutil"
 )
 
 func newServer(t *testing.T, opts ...Option) *httptest.Server {
@@ -37,7 +39,7 @@ func do(t *testing.T, method, url string, headers map[string]string, body any) (
 		reader = bytes.NewReader(raw)
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), method, url, reader)
+	req, err := http.NewRequestWithContext(testutil.Context(t), method, url, reader)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -226,7 +228,7 @@ func TestAnthropicRejectsUnknownModel(t *testing.T) {
 func TestAnthropicMalformedBody(t *testing.T) {
 	srv := newServer(t)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+	req, err := http.NewRequestWithContext(testutil.Context(t), http.MethodPost,
 		srv.URL+"/anthropic/v1/messages", strings.NewReader("{not json"))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -589,7 +591,7 @@ func TestGeminiRejectsMissingMethod(t *testing.T) {
 func TestGeminiMalformedBody(t *testing.T) {
 	srv := newServer(t)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+	req, err := http.NewRequestWithContext(testutil.Context(t), http.MethodPost,
 		srv.URL+"/gemini/v1beta/models/gemini-3.6-flash:generateContent",
 		strings.NewReader("{nope"))
 	if err != nil {
@@ -667,7 +669,7 @@ func TestInjectedStatusGemini(t *testing.T) {
 func TestRetryAfterOnRateLimit(t *testing.T) {
 	srv := newServer(t)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+	req, err := http.NewRequestWithContext(testutil.Context(t), http.MethodPost,
 		srv.URL+"/openai/v1/chat/completions", strings.NewReader(`{"model":"`+
 			StatusModelPrefix+`429","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
