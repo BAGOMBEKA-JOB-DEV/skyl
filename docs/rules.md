@@ -204,6 +204,21 @@ can be assembled mechanically.
 **9.5 — CI must be green to merge.** Not "green except that one flake" — a
 flaky test is a broken test.
 
+**9.6 — Every commit carries a `Signed-off-by` line.** Add one with
+`git commit -s`, or let the hook in `.githooks/` do it — see
+[CONTRIBUTING.md](../CONTRIBUTING.md).
+
+The line is not a formality and not a signature. It is the
+[Developer Certificate of Origin](https://developercertificate.org): by adding
+it you state that you wrote the change, or that you have the right to submit it
+under Apache 2.0. That is the difference between this project *asserting* its
+contributions are Apache-2.0 and each contributor actually saying so.
+
+A DCO is deliberately lighter than a CLA: no signature, no paperwork, no
+account with a third party. CI enforces it per commit. If you forget, the fix
+is one command and the failing check prints it:
+`git rebase --signoff <base>`.
+
 ---
 
 ## 10. Formatting and tooling
