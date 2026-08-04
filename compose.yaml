@@ -1,0 +1,38 @@
+# Run the gateway locally against the sandbox — no API keys, no cost.
+#
+#	docker compose up --build
+#	curl -H 'Authorization: Bearer local-dev-token' localhost:8080/v1/providers
+#
+# The sandbox speaks all four providers' wire protocols and answers from a
+# lookup table. It proves the transport, not the model — see docs/sandbox.md.
+# To point at a real provider instead, drop the SKYL_COMPAT_* variables and set
+# OPENAI_API_KEY, ANTHROPIC_API_KEY or GEMINI_API_KEY.
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    # Loopback only. The sandbox is a development fixture and authenticates
+    # nothing meaningfully; it must not be reachable from anywhere else.
+    expose:
+      - "8099"
+
+  gateway:
+    build:
+      context: .
+    depends_on:
+      - sandbox
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SKYL_ADDR: ":8080"
+      # A fixed token because this is a local fixture. Generate a real one with
+      # `openssl rand -hex 32` for anything else.
+      SKYL_AUTH_TOKEN: local-dev-token
+      SKYL_METRICS: "true"
+      SKYL_COMPAT_BASE_URL: http://sandbox:8099/compat/v1
+      SKYL_COMPAT_API_KEY: sandbox-key
+      SKYL_COMPAT_NAME: sandbox
+    # The image has no shell, so the healthcheck cannot use curl. Compose can
+    # still restart on exit; probe /healthz and /readyz from outside.
+    restart: unless-stopped

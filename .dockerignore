@@ -1,0 +1,31 @@
+# Keep the build context small and deterministic.
+#
+# go.work is excluded deliberately: the Dockerfile sets GOWORK=off, but a
+# workspace file inside the context is one more way for resolution to differ
+# between your machine and the image.
+go.work
+go.work.sum
+
+.git
+.github
+.githooks
+docs
+scripts
+compose.yaml
+Dockerfile
+Dockerfile.sandbox
+.dockerignore
+
+# Test-only code and fixtures.
+**/*_test.go
+**/testdata
+
+# Note: cmd/ is NOT excluded, because Dockerfile.sandbox needs it and both
+# images share one build context. The gateway Dockerfile simply does not copy
+# it, which is the part that matters for the gateway's image size.
+
+*.md
+LICENSE
+NOTICE
+coverage.out
+cov.out

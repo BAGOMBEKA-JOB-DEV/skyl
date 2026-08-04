@@ -276,6 +276,30 @@ jobs:
           working-directory: ${{ matrix.module }}
           args: --timeout=5m
 
+  # The container image is code: it encodes the module layout, the build flags
+  # and the CA-bundle requirement. Building it in CI is what stops it drifting
+  # from a repository that has already changed shape three times.
+  image:
+    name: container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: build gateway image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          tags: skyl-gateway:ci
+
+      - name: build sandbox image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.sandbox
+          push: false
+          tags: skyl-sandbox:ci
+
   # A single check for branch protection to require.
   #
   # The matrices above produce fourteen differently-named checks, and naming
@@ -285,7 +309,7 @@ jobs:
   ci-ok:
     name: CI
     if: always()
-    needs: [build, tidy, lint, vuln]
+    needs: [build, tidy, lint, vuln, image]
     runs-on: ubuntu-latest
     steps:
       - name: check results

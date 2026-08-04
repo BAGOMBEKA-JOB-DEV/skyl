@@ -1,0 +1,19 @@
+# The local sandbox, containerised for compose.
+#
+# It is a development fixture: it authenticates nothing meaningfully and must
+# never be exposed to a network you do not control. See docs/sandbox.md.
+FROM golang:1.26 AS build
+ENV CGO_ENABLED=0 GOWORK=off GOTOOLCHAIN=go1.26.0
+WORKDIR /src
+COPY go.mod ./
+COPY *.go ./
+COPY internal/ ./internal/
+COPY provider/ ./provider/
+COPY cmd/ ./cmd/
+RUN go build -trimpath -ldflags="-s -w" -o /out/skyl-sandbox ./cmd/skyl-sandbox
+
+FROM gcr.io/distroless/static:nonroot
+COPY --from=build /out/skyl-sandbox /usr/local/bin/skyl-sandbox
+EXPOSE 8099
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/skyl-sandbox", "-addr", "0.0.0.0:8099"]

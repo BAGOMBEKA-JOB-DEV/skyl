@@ -121,17 +121,20 @@ func ConfigFromEnv(logger *slog.Logger) (Config, error) {
 		MetricsHandler:  metricsHandler,
 	}
 
+	// Every parse error names its variable. Without that an operator sees
+	// `invalid duration "12x"` with nothing to say which of a dozen settings
+	// is wrong, on a process that has already refused to start.
 	if raw := os.Getenv(EnvRequestTimeout); raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
-			return Config{}, err
+			return Config{}, fmt.Errorf("%s: %w", EnvRequestTimeout, err)
 		}
 		cfg.RequestTimeout = d
 	}
 	if raw := os.Getenv(EnvIncludeRaw); raw != "" {
 		v, err := strconv.ParseBool(raw)
 		if err != nil {
-			return Config{}, err
+			return Config{}, fmt.Errorf("%s: %w", EnvIncludeRaw, err)
 		}
 		cfg.IncludeRaw = v
 	}
