@@ -21,6 +21,7 @@ import (
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/testutil"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/openai"
 
+	"net/http"
 	"net/http/httptest"
 )
 
@@ -142,26 +143,43 @@ func TestSandboxParsesRetryAfter(t *testing.T) {
 
 // TestSandboxCancellationStopsRetrying checks a cancelled context ends the
 // attempt loop rather than burning through the remaining budget.
+//
+// Cancellation is triggered by the server itself, on the first request. The
+// earlier version raced a wall-clock timeout against the backoff and could only
+// assert a loose upper bound, because full jitter samples the delay from
+// [0, ceiling] — so a run where the first delay happened to be short saw a
+// second attempt and still passed. Cancelling from the handler removes the
+// timing entirely: the count is exactly one or the retry loop ignored the
+// context.
 func TestSandboxCancellationStopsRetrying(t *testing.T) {
-	h, base := newCountingSandbox(t)
+	h := sandbox.New()
+
+	ctx, cancel := context.WithCancel(testutil.Context(t))
+	defer cancel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Cancel before answering, so the caller is already done by the time
+		// the retryable failure comes back.
+		cancel()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
 
 	client := skyl.New(
-		openai.New(sandbox.DefaultAPIKey, openai.WithBaseURL(base+"/openai/v1")),
+		openai.New(sandbox.DefaultAPIKey, openai.WithBaseURL(srv.URL+"/openai/v1")),
 		skyl.WithMaxRetries(5),
-		// Long enough that cancellation lands during the first backoff.
-		skyl.WithRetryDelay(2*time.Second, 5*time.Second),
+		skyl.WithRetryDelay(time.Millisecond, 5*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithTimeout(testutil.Context(t), 150*time.Millisecond)
-	defer cancel()
 
 	_, err := client.Complete(ctx, sandboxRequest(sandbox.StatusModelPrefix+"503"))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	// One attempt reached the server; the cancellation stopped the rest.
-	if got := h.Requests(); got > 2 {
-		t.Errorf("server saw %d requests after cancellation, want at most 2", got)
+	// A 503 is retryable, so five more attempts were budgeted. Cancellation is
+	// the only thing that can have stopped them.
+	if got := h.Requests(); got != 1 {
+		t.Errorf("server saw %d requests, want exactly 1 — the retry loop kept "+
+			"going after the caller's context was done", got)
 	}
 }
 

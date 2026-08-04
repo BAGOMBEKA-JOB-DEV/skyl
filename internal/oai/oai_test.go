@@ -378,7 +378,11 @@ func TestCompleteHandlesErrorInBodyWith200(t *testing.T) {
 	}
 }
 
-func TestUnsupportedPartsAreRejectedNotDropped(t *testing.T) {
+// Named for what it actually exercises: an image on a non-user role. The
+// unrepresentable-part branch it used to claim to cover is unreachable from
+// outside the skyl package, because Part is a closed interface (message.go) —
+// only a new Part type added to skyl itself could reach it.
+func TestImageOnNonUserRoleIsRejectedNotDropped(t *testing.T) {
 	t.Parallel()
 
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -645,11 +649,21 @@ func TestStreamCloseIsIdempotentAndSafeEarly(t *testing.T) {
 func TestStreamCancellationStopsPromptly(t *testing.T) {
 	t.Parallel()
 
-	c := newTestClient(t, sseHandler(
-		`{"choices":[{"delta":{"content":"a"}}]}`,
-		`{"choices":[{"delta":{"content":"b"}}]}`,
-		`[DONE]`,
-	))
+	// The server sends one frame and then holds the connection open. A handler
+	// that returned everything immediately would let the whole body land in the
+	// client's read buffer before cancellation was observed, so the stream
+	// would finish normally and the test would pass without testing anything —
+	// which is exactly what the earlier version of this test did.
+	started := make(chan struct{})
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: "+`{"choices":[{"delta":{"content":"a"}}]}`+"\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s, err := c.Stream(ctx, basicRequest())
@@ -658,10 +672,27 @@ func TestStreamCancellationStopsPromptly(t *testing.T) {
 	}
 	defer s.Close() //nolint:errcheck // test cleanup
 
+	if !s.Next() {
+		t.Fatalf("no first event: %v", s.Err())
+	}
+	<-started
 	cancel()
-	// Draining a cancelled stream must terminate rather than hang; the -race
-	// build and the test timeout together catch a leaked reader.
+
+	// Draining a cancelled stream must terminate rather than hang.
 	for s.Next() {
+	}
+
+	// This test used to end at a bare drain loop with no assertion at all, so
+	// it passed whether cancellation worked, was ignored entirely, or produced
+	// a truncation error. Reporting *why* the stream stopped is the actual
+	// contract: it is what lets a caller tell cancellation apart from a
+	// provider failure.
+	err = s.Err()
+	if err == nil {
+		t.Fatal("Err() = nil after cancellation; the stream gave no reason for stopping")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Err() = %v, want it to wrap context.Canceled", err)
 	}
 }
 
