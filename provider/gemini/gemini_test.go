@@ -403,3 +403,120 @@ func TestProviderSatisfiesInterface(t *testing.T) {
 		t.Errorf("Name() = %q, want gemini", p.Name())
 	}
 }
+
+// Gemini sends no [DONE] sentinel, so a finishReason is the only promise the
+// response is whole. Without checking for one, a connection dropped
+// mid-generation reached EOF and produced a clean terminal event over a
+// partial answer.
+func TestStreamTruncationIsReported(t *testing.T) {
+	t.Parallel()
+
+	p := newTestProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// One content frame, then the connection simply ends — no finishReason.
+		_, _ = io.WriteString(w, `data: {"candidates":[{"content":{"parts":[{"text":"Par"}]}}]}`+"\n\n")
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	})
+
+	stream, err := p.Stream(context.Background(), basicRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close() //nolint:errcheck // test cleanup
+
+	var text strings.Builder
+	for stream.Next() {
+		if ev := stream.Event(); ev.Type == skyl.EventTextDelta {
+			text.WriteString(ev.Text)
+		}
+	}
+
+	err = stream.Err()
+	if err == nil {
+		t.Fatal("Err() = nil, want a truncation error")
+	}
+	if !errors.Is(err, skyl.ErrServer) {
+		t.Errorf("Err() = %v, want it to classify as ErrServer", err)
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("Err() = %q, want it to say the response is truncated", err)
+	}
+	// The partial text is still delivered; the caller needs the fragment and
+	// the fact that it is one.
+	if got := text.String(); got != "Par" {
+		t.Errorf("text = %q, want the partial text %q", got, "Par")
+	}
+}
+
+// Request.Thinking was ignored entirely, even though Gemini expresses
+// reasoning as a token budget. The Enabled:false case is the one that hurt:
+// docs call it "explicitly off", and it silently did nothing.
+func TestThinkingMapsToThinkingConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		thinking   *skyl.Thinking
+		wantSet    bool
+		wantBudget float64
+	}{
+		{name: "nil leaves the provider default alone", thinking: nil, wantSet: false},
+		{
+			name:     "explicitly off means a zero budget",
+			thinking: &skyl.Thinking{Enabled: false},
+			wantSet:  true, wantBudget: 0,
+		},
+		{
+			name:     "enabled without an effort lets the model decide",
+			thinking: &skyl.Thinking{Enabled: true},
+			wantSet:  true, wantBudget: -1,
+		},
+		{
+			name:     "low effort maps to a small budget",
+			thinking: &skyl.Thinking{Enabled: true, Effort: skyl.EffortLow},
+			wantSet:  true, wantBudget: 1024,
+		},
+		{
+			name:     "max effort maps to the largest budget",
+			thinking: &skyl.Thinking{Enabled: true, Effort: skyl.EffortMax},
+			wantSet:  true, wantBudget: 24576,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var captured map[string]any
+			p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &captured)
+				_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)
+			})
+
+			req := basicRequest()
+			req.Thinking = tc.thinking
+
+			if _, err := p.Complete(context.Background(), req); err != nil {
+				t.Fatalf("Complete() error = %v", err)
+			}
+
+			gen, _ := captured["generationConfig"].(map[string]any)
+			tcfg, ok := gen["thinkingConfig"].(map[string]any)
+			if !tc.wantSet {
+				if ok {
+					t.Errorf("thinkingConfig = %v, want it absent for a nil Thinking", tcfg)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("thinkingConfig absent; generationConfig = %v", gen)
+			}
+			if got := tcfg["thinkingBudget"]; got != tc.wantBudget {
+				t.Errorf("thinkingBudget = %v, want %v", got, tc.wantBudget)
+			}
+		})
+	}
+}

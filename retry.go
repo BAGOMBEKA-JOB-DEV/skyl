@@ -2,6 +2,8 @@ package skyl
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"math/rand/v2"
 	"time"
@@ -13,13 +15,28 @@ const (
 	defaultMaxRetries = 3
 	defaultBaseDelay  = 500 * time.Millisecond
 	defaultMaxDelay   = 30 * time.Second
+
+	// defaultRetryAfterCap bounds how long a provider's own Retry-After hint
+	// may hold a request. It is deliberately much larger than defaultMaxDelay:
+	// provider rate-limit windows are typically 60 seconds, so clamping a hint
+	// to the jitter ceiling would retry inside a window the provider has
+	// already told us is closed — spending the whole retry budget to collect
+	// the same 429 four times.
+	defaultRetryAfterCap = 5 * time.Minute
 )
 
 // retryPolicy decides whether and how long to wait before another attempt.
 type retryPolicy struct {
 	maxRetries int
 	baseDelay  time.Duration
-	maxDelay   time.Duration
+
+	// maxDelay caps the computed exponential backoff.
+	maxDelay time.Duration
+
+	// retryAfterCap caps a provider-supplied Retry-After. Separate from
+	// maxDelay because the two answer different questions: how long we choose
+	// to wait, versus how long we will let a provider make us wait.
+	retryAfterCap time.Duration
 }
 
 // shouldRetry reports whether err is worth another attempt.
@@ -33,6 +50,16 @@ func shouldRetry(err error) bool {
 	}
 	// A cancelled or expired context means the caller is done waiting.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	// A rejected certificate is a misconfiguration, not a blip: the next three
+	// attempts fail identically and only delay the error the operator needs to
+	// see.
+	var certErr *tls.CertificateVerificationError
+	var hostErr x509.HostnameError
+	var authErr x509.UnknownAuthorityError
+	if errors.As(err, &certErr) || errors.As(err, &hostErr) || errors.As(err, &authErr) {
 		return false
 	}
 
@@ -55,7 +82,9 @@ func shouldRetry(err error) bool {
 // already struggling.
 //
 // A provider's own Retry-After hint wins over the computed delay when it is
-// longer, because the provider knows better than we do.
+// longer, because the provider knows better than we do — and it is bounded by
+// retryAfterCap rather than by maxDelay, so that honouring a normal 60-second
+// rate-limit window does not require raising the jitter ceiling to match.
 func (p retryPolicy) backoff(attempt int, retryAfter time.Duration) time.Duration {
 	base := p.baseDelay
 	if base <= 0 {
@@ -64,6 +93,10 @@ func (p retryPolicy) backoff(attempt int, retryAfter time.Duration) time.Duratio
 	maxDelay := p.maxDelay
 	if maxDelay <= 0 {
 		maxDelay = defaultMaxDelay
+	}
+	retryAfterCap := p.retryAfterCap
+	if retryAfterCap <= 0 {
+		retryAfterCap = defaultRetryAfterCap
 	}
 
 	// Cap the shift before it overflows; 2^20 * base is far past maxDelay.
@@ -78,14 +111,18 @@ func (p retryPolicy) backoff(attempt int, retryAfter time.Duration) time.Duratio
 	}
 
 	delay := time.Duration(rand.Int64N(int64(ceiling) + 1))
+	if delay > maxDelay {
+		delay = maxDelay
+	}
 
 	if retryAfter > 0 && retryAfter > delay {
+		// Honour the hint, but bound it: an hour-long Retry-After should not
+		// silently wedge the caller's request. The caller's context still
+		// bounds the whole sequence regardless.
 		delay = retryAfter
-	}
-	if delay > maxDelay {
-		// Honour a long Retry-After up to a bound; an hour-long hint should
-		// not silently wedge the caller's request.
-		delay = maxDelay
+		if delay > retryAfterCap {
+			delay = retryAfterCap
+		}
 	}
 	return delay
 }

@@ -35,21 +35,47 @@ const (
 //
 // Providers do not all report every field; zero means "not reported", not
 // "zero tokens".
+//
+// # Inclusion semantics
+//
+// Providers disagree about whether cached tokens are part of the input count.
+// OpenAI and Gemini report a cache figure that is a subset of the prompt count;
+// Anthropic reports cache figures that are disjoint from its input count.
+// Summing the fields blindly therefore over-reports on some providers and not
+// on others, which is exactly the kind of difference a caller should not have
+// to know about.
+//
+// skyl normalises to one rule, and every adapter obeys it:
+//
+//   - InputTokens is the total input, cached tokens included.
+//   - CacheReadTokens and CacheWriteTokens are a breakdown OF InputTokens,
+//     not an addition to it.
+//
+// So InputTokens is what to bill, and CacheReadTokens is how much of it was
+// discounted.
 type Usage struct {
-	InputTokens  int
+	// InputTokens is every token of input, including any served from or
+	// written to a cache.
+	InputTokens int
+
+	// OutputTokens is every token the model generated.
 	OutputTokens int
 
 	// CacheReadTokens were served from a prompt cache, usually at a large
-	// discount.
+	// discount. They are part of InputTokens, not additional to it.
 	CacheReadTokens int
 
 	// CacheWriteTokens were written to a prompt cache, usually at a premium.
+	// They are part of InputTokens, not additional to it.
 	CacheWriteTokens int
 }
 
 // TotalTokens returns every token the provider reported.
+//
+// Cache figures are a breakdown of InputTokens, so they are deliberately not
+// added again — see the inclusion semantics on [Usage].
 func (u Usage) TotalTokens() int {
-	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+	return u.InputTokens + u.OutputTokens
 }
 
 // Add returns the sum of two usage records, for accumulating across a

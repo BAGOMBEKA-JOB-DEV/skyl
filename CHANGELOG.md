@@ -73,10 +73,77 @@ to-do application, which remains archived on the `master` branch.
 - ADRs 0001–0006 recording the load-bearing decisions
 - `CONTRIBUTING.md`, `SECURITY.md`
 
+### Changed
+
+- **`Usage` now defines its inclusion semantics, and `Usage.TotalTokens()` no
+  longer double-counts cached tokens.** `InputTokens` is the total input
+  *including* anything served from or written to a cache; `CacheReadTokens` and
+  `CacheWriteTokens` are a breakdown of it rather than an addition to it.
+  `TotalTokens()` is therefore `InputTokens + OutputTokens`.
+
+  This is a behavioural change for anyone already reading `TotalTokens()`.
+  Previously OpenAI and Gemini over-reported — their wire formats put cached
+  tokens inside the prompt count, so the cache figure was added twice — while
+  Anthropic under-reported `InputTokens`, because its wire format excludes the
+  cache counters and skyl passed them straight through. The same cached
+  conversation reported a different billable input depending on which provider
+  served it. **Migration:** if you were computing
+  `InputTokens + CacheReadTokens` yourself, drop the addition.
+
+- **A provider's `Retry-After` is no longer clamped to the backoff ceiling.**
+  It now has its own bound, configurable with `WithRetryAfterCap` and
+  defaulting to 5 minutes. `WithRetryDelay`'s max continues to cap only skyl's
+  computed backoff.
+
+- **`*Error` now wraps its underlying cause** as well as its sentinel, so
+  `errors.Is(err, context.DeadlineExceeded)` works on a request that timed out.
+  `Unwrap` consequently returns `[]error` rather than `error`; `errors.Is` and
+  `errors.As` are unaffected.
+
+### Added
+
+- `docs/roadmap.md` — what stands between this and production use, from an
+  audit of the gap between "CI is green" and "a company can adopt this".
+- `WithRetryAfterCap` bounds how long a provider may hold a retry.
+- The shared contract suite now asserts that every adapter honours
+  `Request.ProviderOptions`, so the rule cannot be met by one adapter and
+  quietly missed by another.
+- `Request.Thinking` is mapped for Gemini, including `&Thinking{Enabled:false}`
+  as a zero thinking budget.
+
 ### Fixed
 
-Both found by widening test coverage before the first release, so neither ever
-shipped.
+- **`provider/anthropic` silently ignored `Request.ProviderOptions`**, in
+  violation of the rule that every adapter must honour it (rules.md §6.5). The
+  adapter builds a typed SDK params struct, so there was no map to merge into
+  and the field was simply never read — leaving `cache_control`, `top_k`, and
+  every beta feature unreachable on Anthropic, with no workaround. Options are
+  now applied to the encoded body, so caller values override skyl's.
+- **`provider/anthropic` rebuilt tool schemas lossily**, keeping only
+  `properties` and `required`. `$defs`, `$ref`, `oneOf`, and
+  `additionalProperties` were dropped, so a schema generated from a Go struct
+  or an OpenAPI document reached Anthropic with dangling references while
+  reaching OpenAI intact — the same `skyl.Tool` meaning two different things
+  depending on the provider.
+- **The OpenAI-format adapters dropped assistant text when a host returned
+  content as an array of blocks** rather than a bare string. vLLM, some Azure
+  deployments, and several OpenRouter upstreams do exactly that, and the result
+  was a successful response with empty text on both the completion and
+  streaming paths.
+- **A stream cut short was indistinguishable from a complete one.** A
+  connection dropped mid-generation reaches EOF with no reader error, so all
+  three adapters emitted a clean terminal event over a partial answer. They now
+  report a truncated response, while still delivering the text read so far.
+- **A refusal with no content was reported as success.** `content_filter` and
+  `refusal` mapped to `StopRefusal` but returned no error, so `ErrRefusal` was
+  never produced by any adapter and the gateway's 422 branch was unreachable. A
+  refusal that *does* carry text is still returned normally.
+- **Certificate failures were retried.** A rejected certificate is a
+  misconfiguration, not a blip; retrying spent the whole budget to receive the
+  same answer and delayed the error the operator needed to see.
+
+Both of the following were found by widening test coverage before the first
+release, so neither ever shipped.
 
 - `provider/anthropic` omitted `input_schema` from a tool declared without
   parameters. The SDK's schema struct drops itself when every field is zero,
