@@ -257,7 +257,7 @@ func TestHandleChat(t *testing.T) {
 		"model": "some-model",
 		"system": "be terse",
 		"max_tokens": 100,
-		"messages": [{"role": "user", "content": "hi"}]
+		"messages": [{"role": "user", "text": "hi"}]
 	}`, testToken)
 
 	if rec.Code != http.StatusOK {
@@ -302,17 +302,17 @@ func TestHandleChatValidation(t *testing.T) {
 	}{
 		{"not JSON", `{{{`, http.StatusBadRequest},
 		{"unknown field", `{"model":"m","messages":[],"bogus":1}`, http.StatusBadRequest},
-		{"no model", `{"messages":[{"role":"user","content":"hi"}]}`, http.StatusBadRequest},
+		{"no model", `{"messages":[{"role":"user","text":"hi"}]}`, http.StatusBadRequest},
 		{"no messages", `{"model":"m","messages":[]}`, http.StatusBadRequest},
-		{"unknown role", `{"model":"m","messages":[{"role":"wizard","content":"hi"}]}`, http.StatusBadRequest},
+		{"unknown role", `{"model":"m","messages":[{"role":"wizard","text":"hi"}]}`, http.StatusBadRequest},
 		{
 			"tool message without call ID",
-			`{"model":"m","messages":[{"role":"tool","content":"42"}]}`,
+			`{"model":"m","messages":[{"role":"tool","content":[{"type":"tool_result","content":"42"}]}]}`,
 			http.StatusBadRequest,
 		},
 		{
 			"unknown provider",
-			`{"provider":"nope","model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			`{"provider":"nope","model":"m","messages":[{"role":"user","text":"hi"}]}`,
 			http.StatusNotFound,
 		},
 	}
@@ -357,7 +357,7 @@ func TestUpstreamErrorMapping(t *testing.T) {
 
 			srv := newTestServer(t, &stubProvider{name: "fake", err: tc.err})
 			rec := do(t, srv, http.MethodPost, "/v1/chat",
-				`{"model":"m","messages":[{"role":"user","content":"hi"}]}`, testToken)
+				`{"model":"m","messages":[{"role":"user","text":"hi"}]}`, testToken)
 
 			if rec.Code != tc.want {
 				t.Errorf("status = %d, want %d", rec.Code, tc.want)
@@ -383,7 +383,7 @@ func TestUpstreamAuthFailureIsNotReportedAs401(t *testing.T) {
 		err:  skyl.NewError("fake", 401, skyl.ErrAuth, "bad provider key", nil),
 	})
 	rec := do(t, srv, http.MethodPost, "/v1/chat",
-		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`, testToken)
+		`{"model":"m","messages":[{"role":"user","text":"hi"}]}`, testToken)
 
 	if rec.Code == http.StatusUnauthorized {
 		t.Error("status = 401; an upstream credential failure must not look like a client auth failure")
@@ -432,7 +432,7 @@ func TestHandleChatStream(t *testing.T) {
 	})
 
 	rec := do(t, srv, http.MethodPost, "/v1/chat/stream",
-		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`, testToken)
+		`{"model":"m","messages":[{"role":"user","text":"hi"}]}`, testToken)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -488,7 +488,7 @@ func TestStreamHandshakeErrorUsesHTTPStatus(t *testing.T) {
 		err:  skyl.NewError("fake", 429, skyl.ErrRateLimit, "slow down", nil),
 	})
 	rec := do(t, srv, http.MethodPost, "/v1/chat/stream",
-		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`, testToken)
+		`{"model":"m","messages":[{"role":"user","text":"hi"}]}`, testToken)
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want 429", rec.Code)
@@ -505,7 +505,7 @@ func TestStreamMidFlightErrorRidesTheStream(t *testing.T) {
 	})
 
 	rec := do(t, srv, http.MethodPost, "/v1/chat/stream",
-		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`, testToken)
+		`{"model":"m","messages":[{"role":"user","text":"hi"}]}`, testToken)
 
 	// Headers were already flushed, so the status stays 200 and the failure
 	// must be reported in-band.
@@ -535,7 +535,7 @@ func TestIncludeRawIsOptIn(t *testing.T) {
 	}
 
 	rec := do(t, srv, http.MethodPost, "/v1/chat",
-		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`, testToken)
+		`{"model":"m","messages":[{"role":"user","text":"hi"}]}`, testToken)
 
 	var got ChatResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -555,8 +555,10 @@ func TestToolResultMessageIsForwarded(t *testing.T) {
 	rec := do(t, srv, http.MethodPost, "/v1/chat", `{
 		"model": "m",
 		"messages": [
-			{"role": "user", "content": "weather?"},
-			{"role": "tool", "content": "22C", "tool_call_id": "call_1"}
+			{"role": "user", "text": "weather?"},
+			{"role": "tool", "content": [
+				{"type": "tool_result", "tool_call_id": "call_1", "content": "22C"}
+			]}
 		]
 	}`, testToken)
 

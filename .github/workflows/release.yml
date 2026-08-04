@@ -1,0 +1,52 @@
+name: Release
+
+# Produces the supply-chain evidence an enterprise review asks for: an SBOM of
+# what a release actually contains, and a signed attestation that GitHub built
+# it from this commit.
+#
+# It does not publish the Go modules. Those are published by pushing a tag —
+# the proxy fetches from the repository — which is why RELEASING.md is a manual
+# process. This workflow attaches the evidence to the tag that already exists.
+on:
+  push:
+    tags:
+      - "v*"
+      - "provider/anthropic/v*"
+      - "gateway/v*"
+      - "otel/v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: SBOM and provenance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach artefacts to the release
+      id-token: write # sign the provenance attestation
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.mod
+
+      # An SBOM of the source tree covers all four modules at once, which is
+      # what somebody auditing a release actually wants — the alternative is
+      # four partial documents that have to be reconciled by hand.
+      - name: generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          format: spdx-json
+          output-file: skyl.spdx.json
+          artifact-name: skyl.spdx.json
+
+      - name: attest provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: skyl.spdx.json

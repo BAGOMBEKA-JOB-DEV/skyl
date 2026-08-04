@@ -1,0 +1,17 @@
+# Every change needs a review from a maintainer.
+#
+# This does not, on its own, produce a second pair of eyes on a single-maintainer
+# project — the bus factor is one and MAINTAINERS.md says so. What it does is
+# make the ownership explicit now, so that when a second maintainer appears the
+# routing already exists.
+
+* @BAGOMBEKA-JOB-DEV
+
+# The load-bearing decisions. A change here is a change to what the project
+# promises, not just to how it works.
+/docs/rules.md      @BAGOMBEKA-JOB-DEV
+/docs/adr/          @BAGOMBEKA-JOB-DEV
+/SECURITY.md        @BAGOMBEKA-JOB-DEV
+/RELEASING.md       @BAGOMBEKA-JOB-DEV
+/.github/           @BAGOMBEKA-JOB-DEV
+/provider.go        @BAGOMBEKA-JOB-DEV

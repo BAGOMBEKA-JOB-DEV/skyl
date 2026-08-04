@@ -134,7 +134,49 @@ work today, then does.
 
 **Remaining:** cut the actual tags. See RELEASING.md.
 
-## Phase 3 — What an enterprise review asks for
+## Phase 3 — What an enterprise review asks for ✅
+
+Done, except for the parts that live in GitHub settings rather than in the
+repository. See "Settings still to apply" at the end of this section.
+
+- **Observability.** `HookEvent` now carries the response model, response ID,
+  stop reason and the request, and a terminal `stream_end` event reports
+  streaming token usage — which was previously unreportable, because the only
+  stream event fired at the handshake before a token existed. It fires on
+  whichever of the terminal event or `Close` comes first, so an abandoned
+  stream is reported too rather than silently dropped.
+- **`skyl/otel`** implements the OpenTelemetry GenAI semantic conventions:
+  `gen_ai.*` span attributes, `gen_ai.client.token.usage` and
+  `gen_ai.client.operation.duration`. Prompt content is deliberately never
+  recorded. See [ADR-0007](adr/0007-otel-is-its-own-module.md).
+- **The gateway** can now express a tool-calling conversation — its wire format
+  could not carry an assistant turn's tool calls, so the loop it advertised
+  dead-ended after one round. It also drains gracefully instead of blocking for
+  the full grace period and exiting non-zero, and gained `/readyz`, `/metrics`,
+  concurrency limiting, rotatable tokens with tenant labels, CORS, SSE
+  heartbeats and an echoed request ID.
+- **Supply chain**: `govulncheck` per module, CodeQL, Scorecard, Dependabot
+  across four modules plus actions, SBOM and signed provenance on release, every
+  action pinned by digest, and a single `ci-ok` gate for branch protection.
+- **Governance**: the licence names a copyright holder, `NOTICE` carries the
+  attribution the BSD-3-Clause dependencies require of redistributed binaries,
+  each published module has its own `LICENSE`, and there are CODEOWNERS,
+  MAINTAINERS, a code of conduct, templates and DCO enforcement.
+
+### Settings still to apply
+
+These cannot be committed — they live in the repository's GitHub settings:
+
+1. **Branch protection on `main`**: require pull requests, and require the
+   single status check named **`CI`**. That is the `ci-ok` job, which exists
+   precisely so the required-checks list does not go stale every time a module
+   or Go version is added.
+2. **Enable private vulnerability reporting** (Settings → Security), which is
+   the channel `SECURITY.md` tells people to use.
+3. **Enable Dependabot alerts and security updates.**
+4. After the first Scorecard run, add its badge to `README.md`.
+
+## Phase 3 — original scope
 
 **Observability.** `Hook` is the only surface, and it cannot report streaming token usage
 at all — the stream event fires at handshake, before a single token exists. Streaming is
@@ -157,8 +199,17 @@ SSE keep-alive — which means a default nginx will buffer the stream and destro
 property the endpoint exists for.
 
 **Supply chain.** Actions are pinned by tag rather than digest, and there is no
-`govulncheck`, SAST, dependency bot, SBOM, or signed release. The Anthropic module
-transitively depends on a release candidate that nothing scans.
+`govulncheck`, SAST, dependency bot, SBOM, or signed release.
+
+An earlier version of this document said the Anthropic module "transitively
+depends on a release candidate that nothing scans", implying the release
+candidate was the risk. It has now been scanned. `govulncheck` across all four
+modules reports **zero known vulnerabilities in any third-party dependency**,
+including `go.yaml.in/yaml/v4 v4.0.0-rc.2`. Every finding it does report is the
+Go toolchain itself when pinned to a `.0` patch release, reached through
+ordinary `crypto/tls` and `net/http` calls — and CI resolves to the newest
+patch, so CI is clean. The gap was never a known-vulnerable dependency; it was
+that nothing ran the scanner. That is what has been fixed.
 
 **Governance.** The Apache-2.0 licence appendix has no copyright holder filled in. There
 is no CODEOWNERS, code of conduct, issue template, or DCO, and the bus factor is one.

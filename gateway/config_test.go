@@ -233,33 +233,100 @@ func TestAddr(t *testing.T) {
 	}
 }
 
-func TestItoa(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		in   int
-		want string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{9, "9"},
-		{10, "10"},
-		{200, "200"},
-		{404, "404"},
-		{1234567890, "1234567890"},
-	}
-
-	for _, tt := range tests {
-		if got := itoa(tt.in); got != tt.want {
-			t.Errorf("itoa(%d) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 func providerNames(cfg Config) []string {
 	out := make([]string, 0, len(cfg.Providers))
 	for name := range cfg.Providers {
 		out = append(out, name)
 	}
 	return out
+}
+
+func TestClientOptionsFromEnv(t *testing.T) {
+	// Not parallel: it sets process environment.
+	t.Setenv(EnvOpenAIKey, "k")
+	t.Setenv(EnvMaxRetries, "1")
+	t.Setenv(EnvRetryBase, "10ms")
+	t.Setenv(EnvRetryMax, "100ms")
+	t.Setenv(EnvRetryAfterCap, "2s")
+	t.Setenv(EnvAttemptTimeout, "30s")
+	t.Setenv(EnvAuthToken, "t")
+
+	cfg, err := ConfigFromEnv(slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("ConfigFromEnv() error = %v", err)
+	}
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("got %d providers, want 1", len(cfg.Providers))
+	}
+	// The options are applied inside skyl.New, which exposes no getters — so
+	// what is checked here is that a full set parses and builds a client at
+	// all. The values themselves are skyl's to honour, and it has its own
+	// tests for that.
+	if cfg.Providers["openai"] == nil {
+		t.Error("openai client was not built")
+	}
+}
+
+func TestClientOptionsRejectMalformedValues(t *testing.T) {
+	for _, tc := range []struct{ name, env, value string }{
+		{"max retries", EnvMaxRetries, "many"},
+		{"retry base", EnvRetryBase, "soon"},
+		{"retry max", EnvRetryMax, "later"},
+		{"retry-after cap", EnvRetryAfterCap, "never"},
+		{"attempt timeout", EnvAttemptTimeout, "eventually"},
+		{"max concurrent", EnvMaxConcurrent, "lots"},
+		{"heartbeat", EnvHeartbeatInterval, "sometimes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvOpenAIKey, "k")
+			t.Setenv(EnvAuthToken, "t")
+			t.Setenv(tc.env, tc.value)
+
+			if _, err := ConfigFromEnv(slog.New(slog.DiscardHandler)); err == nil {
+				t.Errorf("%s = %q was accepted; a typo in a deployment must fail loudly",
+					tc.env, tc.value)
+			}
+		})
+	}
+}
+
+func TestServerSettingsFromEnv(t *testing.T) {
+	t.Setenv(EnvOpenAIKey, "k")
+	t.Setenv(EnvAuthToken, "primary")
+	t.Setenv(EnvAuthTokens, "ci:token-a, partner:token-b")
+	t.Setenv(EnvMaxConcurrent, "16")
+	t.Setenv(EnvAllowedOrigins, "https://a.example.com, https://b.example.com")
+	t.Setenv(EnvHeartbeatInterval, "5s")
+
+	cfg, err := ConfigFromEnv(slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("ConfigFromEnv() error = %v", err)
+	}
+
+	if cfg.MaxConcurrent != 16 {
+		t.Errorf("MaxConcurrent = %d, want 16", cfg.MaxConcurrent)
+	}
+	if cfg.HeartbeatInterval != 5*time.Second {
+		t.Errorf("HeartbeatInterval = %v, want 5s", cfg.HeartbeatInterval)
+	}
+	if len(cfg.AllowedOrigins) != 2 || cfg.AllowedOrigins[0] != "https://a.example.com" {
+		t.Errorf("AllowedOrigins = %v, want two trimmed entries", cfg.AllowedOrigins)
+	}
+	if cfg.AuthTokens["ci"] != "token-a" || cfg.AuthTokens["partner"] != "token-b" {
+		t.Errorf("AuthTokens = %v, want ci and partner labelled", cfg.AuthTokens)
+	}
+}
+
+func TestLabelledTokensRejectMalformedPairs(t *testing.T) {
+	for _, raw := range []string{"no-colon", ":missing-label", "label:", "a:b,broken"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv(EnvOpenAIKey, "k")
+			t.Setenv(EnvAuthToken, "t")
+			t.Setenv(EnvAuthTokens, raw)
+
+			if _, err := ConfigFromEnv(slog.New(slog.DiscardHandler)); err == nil {
+				t.Errorf("%q was accepted; a malformed token list must not start silently", raw)
+			}
+		})
+	}
 }

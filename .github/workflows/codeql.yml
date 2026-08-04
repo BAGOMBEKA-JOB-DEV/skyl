@@ -1,0 +1,49 @@
+name: CodeQL
+
+# Static analysis, on a schedule as well as on changes.
+#
+# The schedule matters as much as the trigger: CodeQL's rules are updated
+# independently of this repository, so a query added next month finds things in
+# code that has not changed since. A PR-only run would never see them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 2" # Tuesdays, 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # required to upload findings
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.mod
+
+      - name: initialise
+        uses: github/codeql-action/init@c3400c2f38909e0dcf3c3a41f2030a8217be5d3e # v3
+        with:
+          languages: go
+          # The default suite is what most projects run; security-extended adds
+          # lower-confidence queries that are worth reading on a codebase whose
+          # whole job is handling other people's credentials.
+          queries: security-extended
+
+      # The workspace covers every module, so one build analyses all four.
+      - name: build
+        run: go build ./... && (cd otel && go build ./...)
+
+      - name: analyse
+        uses: github/codeql-action/analyze@c3400c2f38909e0dcf3c3a41f2030a8217be5d3e # v3
