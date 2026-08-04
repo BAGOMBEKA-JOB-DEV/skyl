@@ -40,8 +40,9 @@ type oaiRequest struct {
 	Model    string `json:"model"`
 	Stream   bool   `json:"stream"`
 	Messages []struct {
-		Role    string `json:"role"`
-		Content any    `json:"content"`
+		Role       string `json:"role"`
+		Content    any    `json:"content"`
+		ToolCallID string `json:"tool_call_id"`
 	} `json:"messages"`
 
 	// Both spellings are accepted. OpenAI's current models require
@@ -50,6 +51,66 @@ type oaiRequest struct {
 	// has to honour whichever arrives.
 	MaxTokens           int `json:"max_tokens"`
 	MaxCompletionTokens int `json:"max_completion_tokens"`
+
+	Tools []struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			Parameters  map[string]any `json:"parameters"`
+		} `json:"function"`
+	} `json:"tools"`
+
+	// tool_choice is either a bare string ("auto", "none", "required") or an
+	// object naming one function, so it can only be decoded as `any`.
+	ToolChoice any `json:"tool_choice"`
+}
+
+// toolNames lists the declared functions, in order.
+func (r oaiRequest) toolNames() []string {
+	names := make([]string, 0, len(r.Tools))
+	for _, t := range r.Tools {
+		if t.Function.Name != "" {
+			names = append(names, t.Function.Name)
+		}
+	}
+	return names
+}
+
+// toolChoice normalises tool_choice onto the shared vocabulary.
+func (r oaiRequest) toolChoice() (mode, forced string) {
+	switch v := r.ToolChoice.(type) {
+	case nil:
+		return choiceAuto, ""
+	case string:
+		return v, ""
+	case map[string]any:
+		fn, _ := v["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		return choiceRequired, name
+	default:
+		return choiceAuto, ""
+	}
+}
+
+// lastToolResult returns the newest tool output the caller sent back, if the
+// conversation has reached that stage.
+func (r oaiRequest) lastToolResult() (string, bool) {
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		m := r.Messages[i]
+		if m.Role != "tool" {
+			continue
+		}
+		// A tool message without its correlating ID is malformed, and the real
+		// API rejects it — so the sandbox refuses to treat it as an answer.
+		if m.ToolCallID == "" {
+			return "", false
+		}
+		if s, ok := m.Content.(string); ok {
+			return s, true
+		}
+	}
+	return "", false
 }
 
 func (r oaiRequest) lastUserText() string {
@@ -99,7 +160,10 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 		oaiError(w, status, "api_error", "", "sandbox: injected status "+req.Model)
 		return
 	}
-	if !known(oaiCatalogue, req.Model) {
+	// A stream-fault model is not in the catalogue, so the 404 check has to let
+	// it through to reach the streaming path it is asking to break.
+	fault, faulty := streamFault(req.Model)
+	if !faulty && !known(oaiCatalogue, req.Model) {
 		oaiError(w, http.StatusNotFound, "invalid_request_error", "model_not_found",
 			fmt.Sprintf("The model `%s` does not exist.", req.Model))
 		return
@@ -107,12 +171,44 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 
 	prompt := req.lastUserText()
 	answer := reply(prompt)
+
+	// A turn that already carries a tool result is the model's second turn: it
+	// answers using the output rather than asking for the tool again. Without
+	// this the conversation never terminates, which is itself the bug an
+	// adapter would hit against a real provider.
+	var call *toolCall
+	if result, ok := req.lastToolResult(); ok {
+		answer = replyToToolResult(result)
+	} else {
+		mode, forced := req.toolChoice()
+		call = decideToolCall(prompt, req.toolNames(), mode, forced)
+	}
+
 	inTokens := countTokens(prompt)
 	outTokens := countTokens(answer)
 
 	if req.Stream {
-		h.oaiStream(w, req.Model, answer, inTokens, outTokens)
+		h.oaiStream(w, req.Model, answer, call, fault, inTokens, outTokens)
 		return
+	}
+
+	message := map[string]any{"role": "assistant", "content": answer}
+	finish := "stop"
+	if call != nil {
+		// A turn that calls a tool carries no prose, and content is explicitly
+		// null rather than absent — an adapter that reads it as a string gets a
+		// type mismatch here rather than in production.
+		message["content"] = nil
+		message["tool_calls"] = []any{map[string]any{
+			"id":   call.ID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      call.Name,
+				"arguments": call.Args,
+			},
+		}}
+		finish = "tool_calls"
+		outTokens = countTokens(call.Args)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -122,8 +218,8 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 		"model":   req.Model,
 		"choices": []any{map[string]any{
 			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": answer},
-			"finish_reason": "stop",
+			"message":       message,
+			"finish_reason": finish,
 		}},
 		"usage": map[string]any{
 			"prompt_tokens":     inTokens,
@@ -133,7 +229,7 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) oaiStream(w http.ResponseWriter, model, answer string, in, out int) {
+func (h *Handler) oaiStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int) {
 	flush := beginSSE(w)
 
 	send := func(payload any) {
@@ -161,10 +257,43 @@ func (h *Handler) oaiStream(w http.ResponseWriter, model, answer string, in, out
 	}
 
 	send(base(map[string]any{"role": "assistant", "content": ""}, nil))
-	for _, piece := range chunk(answer) {
-		send(base(map[string]any{"content": piece}, nil))
+
+	// Both faults fire after a good frame, so the failure is genuinely
+	// mid-stream: headers are sent, the client has already seen content, and
+	// there is no way back to an HTTP status.
+	switch fault {
+	case FaultTruncate:
+		send(base(map[string]any{"content": "par"}, nil))
+		return
+	case FaultMidStreamError:
+		send(base(map[string]any{"content": "par"}, nil))
+		send(map[string]any{"error": map[string]any{
+			"message": "sandbox: injected mid-stream failure",
+			"type":    "server_error",
+		}})
+		return
 	}
-	send(base(map[string]any{}, "stop"))
+
+	if call != nil {
+		// Arguments arrive as partial JSON across frames, so the first fragment
+		// carries the id and name and the rest carry nothing but more text.
+		for i, frag := range argChunks(call.Args) {
+			fn := map[string]any{"arguments": frag}
+			tc := map[string]any{"index": 0, "function": fn}
+			if i == 0 {
+				tc["id"] = call.ID
+				tc["type"] = "function"
+				fn["name"] = call.Name
+			}
+			send(base(map[string]any{"tool_calls": []any{tc}}, nil))
+		}
+		send(base(map[string]any{}, "tool_calls"))
+	} else {
+		for _, piece := range chunk(answer) {
+			send(base(map[string]any{"content": piece}, nil))
+		}
+		send(base(map[string]any{}, "stop"))
+	}
 
 	// A final chunk carrying usage and no choices, which is what
 	// stream_options.include_usage produces.

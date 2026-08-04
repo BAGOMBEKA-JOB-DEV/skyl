@@ -61,6 +61,45 @@ const DefaultAPIKey = "sandbox-key"
 // a real provider to rate-limit us.
 const StatusModelPrefix = "sandbox-status-"
 
+// Stream faults make a response fail *after* it has started.
+//
+// StatusModelPrefix cannot express this: it is evaluated before the response
+// begins, and once the SSE header has been written the status is fixed. But a
+// stream that dies mid-flight is an ordinary production event — a dropped load
+// balancer, a proxy timeout, a provider erroring after the first token — and
+// every adapter's handling of it was dead code, because nothing could produce
+// one.
+//
+// The model ID carries the instruction, as it does for injected statuses:
+//
+//	sandbox-stream-truncate   cut the connection with no terminal event
+//	sandbox-stream-error      emit the provider's own in-band error frame
+const (
+	StreamFaultPrefix = "sandbox-stream-"
+
+	// FaultTruncate ends the stream after the first frame, with no
+	// finish_reason, no [DONE], and no message_stop. A caller must not mistake
+	// the partial answer for a complete one.
+	FaultTruncate = "sandbox-stream-truncate"
+
+	// FaultMidStreamError emits an error inside the stream body, after a
+	// successful 200 and at least one good frame.
+	FaultMidStreamError = "sandbox-stream-error"
+)
+
+// streamFault reports the fault a model ID asks for, if any.
+func streamFault(model string) (string, bool) {
+	if !strings.HasPrefix(model, StreamFaultPrefix) {
+		return "", false
+	}
+	switch model {
+	case FaultTruncate, FaultMidStreamError:
+		return model, true
+	default:
+		return "", false
+	}
+}
+
 // Handler serves the sandbox. Safe for concurrent use.
 type Handler struct {
 	mux    *http.ServeMux

@@ -55,14 +55,14 @@ jobs:
           - module: "."
             go: "1.26"
             coverage: true
-            min_coverage: "80"
+            min_coverage: "87"
           - module: "provider/anthropic"
             go: "1.24"
             coverage: false
           - module: "provider/anthropic"
             go: "1.26"
             coverage: true
-            min_coverage: "88"
+            min_coverage: "93"
           - module: "gateway"
             go: "1.24"
             coverage: false
@@ -136,9 +136,10 @@ jobs:
         run: |
           # Test-support packages are scaffolding, not shipped behaviour. Their
           # uncovered halves are the failure-reporting paths that only execute
-          # when a test fails, and the live-API harness that CI never runs — so
+          # when a test fails, the live-API harness that CI never runs, and the
+          # cassette recorder's record half, which needs a real credential — so
           # measuring them reports on the test run, not on the library.
-          grep -v -E '/internal/(testutil|providertest)/' coverage.out > covered.out
+          grep -v -E '/internal/(testutil|providertest|cassette)/' coverage.out > covered.out
 
           total=$(go tool cover -func=covered.out | awk '/^total:/ {print $3}' | tr -d '%')
           echo "coverage: ${total}% (floor ${{ matrix.min_coverage }}%)"
