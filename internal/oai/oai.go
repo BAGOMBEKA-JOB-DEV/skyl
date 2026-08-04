@@ -316,6 +316,47 @@ func mapFinishReason(s string) skyl.StopReason {
 	}
 }
 
+// textFromContent extracts assistant text from a chat-completions content
+// field.
+//
+// The field is typed `any` because hosts disagree about its shape. OpenAI
+// itself sends a bare string, but vLLM, some Azure deployments, and several
+// OpenRouter upstreams send the same array-of-blocks form they accept on the
+// request side. Reading only the string case meant those hosts produced a
+// successful response with no text at all — the silent data loss docs/rules.md
+// §6.1 exists to prevent.
+func textFromContent(content any) string {
+	switch v := content.(type) {
+	case nil:
+		return ""
+
+	case string:
+		return v
+
+	case []any:
+		var b strings.Builder
+		for _, item := range v {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			// Blocks carrying anything other than text (images, audio) have no
+			// text to contribute; skipping them is not a loss, because the
+			// whole payload remains on Response.Raw.
+			if t, ok := block["type"].(string); ok && t != "text" {
+				continue
+			}
+			if s, ok := block["text"].(string); ok {
+				b.WriteString(s)
+			}
+		}
+		return b.String()
+
+	default:
+		return ""
+	}
+}
+
 func toolCallFromWire(w wireToolCall) skyl.ToolCall {
 	args := json.RawMessage(w.Function.Arguments)
 	if len(args) == 0 {
@@ -363,11 +404,22 @@ func (c *Client) Complete(ctx context.Context, req *skyl.Request) (*skyl.Respons
 
 	choice := wire.Choices[0]
 	var parts []skyl.Part
-	if s, ok := choice.Message.Content.(string); ok && s != "" {
-		parts = append(parts, skyl.Text{Text: s})
+	if text := textFromContent(choice.Message.Content); text != "" {
+		parts = append(parts, skyl.Text{Text: text})
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		parts = append(parts, toolCallFromWire(tc))
+	}
+
+	stopReason := mapFinishReason(choice.FinishReason)
+
+	// A refusal that produced no content is a failure, not a success with an
+	// empty string: a caller who only reads Text() would see the model return
+	// nothing and have no idea why. A refusal that still produced text is
+	// returned normally, with StopRefusal on the response.
+	if stopReason == skyl.StopRefusal && len(parts) == 0 {
+		return nil, skyl.NewError(c.cfg.Name, httpResp.StatusCode, skyl.ErrRefusal,
+			"the model declined the request ("+choice.FinishReason+")", raw)
 	}
 
 	model := wire.Model
@@ -380,7 +432,9 @@ func (c *Client) Complete(ctx context.Context, req *skyl.Request) (*skyl.Respons
 		Provider:   c.cfg.Name,
 		Model:      model,
 		Message:    skyl.Message{Role: skyl.RoleAssistant, Parts: parts},
-		StopReason: mapFinishReason(choice.FinishReason),
+		StopReason: stopReason,
+		// cached_tokens is already part of prompt_tokens here, which is exactly
+		// the inclusion rule skyl.Usage defines — so these map across directly.
 		Usage: skyl.Usage{
 			InputTokens:     wire.Usage.PromptTokens,
 			OutputTokens:    wire.Usage.CompletionTokens,
@@ -439,8 +493,12 @@ func (c *Client) Models(ctx context.Context) ([]skyl.ModelInfo, error) {
 // Errors
 // ---------------------------------------------------------------------------
 
+// transportError wraps a failure that never produced an HTTP response.
+//
+// The cause is retained rather than flattened into the message, so a caller can
+// still tell a deadline from a DNS failure with errors.Is.
 func (c *Client) transportError(err error) error {
-	return &skyl.Error{Provider: c.cfg.Name, Message: err.Error()}
+	return (&skyl.Error{Provider: c.cfg.Name, Message: err.Error()}).WithCause(err)
 }
 
 func (c *Client) httpError(resp *http.Response) error {
@@ -512,6 +570,13 @@ type stream struct {
 	flushed    bool
 	done       bool
 
+	// sawTerminal records that the provider signalled the end of the response,
+	// either with the [DONE] sentinel or a finish_reason. Without it, a
+	// connection dropped mid-generation reaches EOF looking exactly like a
+	// complete response, and the caller keeps a truncated answer believing it
+	// is whole.
+	sawTerminal bool
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -527,6 +592,7 @@ func (s *stream) Next() bool {
 			continue
 		}
 		if string(data) == "[DONE]" {
+			s.sawTerminal = true
 			return s.finish()
 		}
 
@@ -554,22 +620,36 @@ func (s *stream) Next() bool {
 		choice := chunk.Choices[0]
 		if choice.FinishReason != "" {
 			s.stopReason = mapFinishReason(choice.FinishReason)
+			// Not every compatible host sends [DONE], but a finish_reason is
+			// just as good a promise that the response is complete.
+			s.sawTerminal = true
 		}
 
 		for _, tc := range choice.Delta.ToolCalls {
 			s.accumulate(tc)
 		}
 
-		if text, ok := choice.Delta.Content.(string); ok && text != "" {
+		if text := textFromContent(choice.Delta.Content); text != "" {
 			s.ev = skyl.StreamEvent{Type: skyl.EventTextDelta, Text: text, Raw: data}
 			return true
 		}
 	}
 
 	if err := s.reader.Err(); err != nil {
-		s.err = &skyl.Error{Provider: s.provider, Message: err.Error()}
+		s.err = (&skyl.Error{Provider: s.provider, Message: err.Error()}).WithCause(err)
 		return false
 	}
+
+	// EOF with no terminal signal means the connection ended mid-generation —
+	// a dropped proxy, a severed load balancer. The bytes read so far are a
+	// partial answer, and reporting success would hand the caller a truncated
+	// response indistinguishable from a complete one.
+	if !s.sawTerminal && !s.flushed {
+		s.err = skyl.NewError(s.provider, 0, skyl.ErrServer,
+			"stream ended without a terminal event; the response is truncated", nil)
+		return false
+	}
+
 	return s.finish()
 }
 

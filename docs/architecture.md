@@ -15,7 +15,8 @@ skyl/                                  module github.com/BAGOMBEKA-JOB-DEV/skyl
 ├── stream.go          Stream interface + event types
 ├── errors.go          typed, classified errors
 ├── retry.go           backoff policy
-├── model.go           ModelInfo + optional generated registry
+│                      (ModelInfo lives in response.go; the generated model
+│                       registry is still a roadmap item, not a file)
 │
 ├── provider/
 │   ├── anthropic/     native adapter  ← own go.mod (ADR-0006)
@@ -24,8 +25,15 @@ skyl/                                  module github.com/BAGOMBEKA-JOB-DEV/skyl
 │   └── openaicompat/  generic adapter for OpenAI-shaped endpoints
 │
 ├── internal/
+│   ├── oai/           the OpenAI chat-completions wire format, shared by
+│   │                  provider/openai and provider/openaicompat
 │   ├── sse/           Server-Sent Events reader
-│   └── httpx/         shared HTTP helpers
+│   ├── httpx/         shared HTTP helpers
+│   ├── sandbox/       local server speaking all four wire protocols
+│   ├── providertest/  the contract suite every adapter must pass
+│   └── testutil/      goroutine-leak assertions
+│
+├── cmd/skyl-sandbox/  runs the sandbox (docs/sandbox.md)
 │
 └── gateway/                           module .../skyl/gateway  ← separate go.mod
     ├── server.go      chi router, handlers
