@@ -90,10 +90,6 @@ type Server struct {
 	// tokens maps an accepted bearer value to its caller label.
 	tokens map[string]string
 
-	// writeMu serialises SSE writes between the event loop and the heartbeat
-	// goroutine. Without it a keep-alive could land inside a data frame.
-	writeMu sync.Mutex
-
 	// draining is set when shutdown begins, so readiness fails before the
 	// listener stops accepting. An orchestrator needs that window to take the
 	// instance out of rotation while in-flight work finishes.
@@ -437,7 +433,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// A reasoning model can think for minutes before its first token, and an
 	// idle intermediary will reap the connection long before that. A comment
 	// frame keeps it alive and is ignored by any conforming SSE client.
-	stopBeat := s.startHeartbeat(r.Context(), w, flusher)
+	// The mutex is per request, not per server: it serialises this stream's
+	// event loop against its own heartbeat, and nothing else. On the Server it
+	// would be a single lock every concurrent stream contended for.
+	var writeMu sync.Mutex
+	stopBeat := s.startHeartbeat(r.Context(), w, flusher, &writeMu)
 	defer stopBeat()
 
 	for stream.Next() {
@@ -465,12 +465,12 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		s.writeMu.Lock()
+		writeMu.Lock()
 		ok := writeSSE(w, payload)
 		if ok {
 			flusher.Flush()
 		}
-		s.writeMu.Unlock()
+		writeMu.Unlock()
 		if !ok {
 			return
 		}
@@ -478,8 +478,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	if err := stream.Err(); err != nil {
 		// Headers are already sent, so the error has to ride the stream.
-		s.writeMu.Lock()
-		defer s.writeMu.Unlock()
+		writeMu.Lock()
+		defer writeMu.Unlock()
 		_ = writeSSE(w, map[string]any{
 			"type":  "error",
 			"error": err.Error(),
@@ -613,16 +613,23 @@ func kindOf(err error) string {
 // The writes are serialised with the event loop by a mutex, because a comment
 // interleaved halfway through a data frame would corrupt it. The mutex is the
 // reason this cannot simply be a goroutine writing to w.
-func (s *Server) startHeartbeat(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) func() {
+func (s *Server) startHeartbeat(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	writeMu *sync.Mutex,
+) func() {
 	if s.cfg.HeartbeatInterval <= 0 {
 		return func() {}
 	}
 
 	done := make(chan struct{})
+	exited := make(chan struct{})
 	var stopOnce sync.Once
-	stop := func() { stopOnce.Do(func() { close(done) }) }
 
 	go func() {
+		defer close(exited)
+
 		ticker := time.NewTicker(s.cfg.HeartbeatInterval)
 		defer ticker.Stop()
 		for {
@@ -632,12 +639,12 @@ func (s *Server) startHeartbeat(ctx context.Context, w http.ResponseWriter, flus
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.writeMu.Lock()
+				writeMu.Lock()
 				_, err := fmt.Fprint(w, ": keep-alive\n\n")
 				if err == nil {
 					flusher.Flush()
 				}
-				s.writeMu.Unlock()
+				writeMu.Unlock()
 				if err != nil {
 					return
 				}
@@ -645,5 +652,13 @@ func (s *Server) startHeartbeat(ctx context.Context, w http.ResponseWriter, flus
 		}
 	}()
 
-	return stop
+	// Waiting for the goroutine to exit is the whole point, and closing the
+	// channel alone is not enough. A ResponseWriter is only valid until its
+	// handler returns; a goroutine that had already passed the select and was
+	// blocked on the mutex would write to it afterwards. That is a data race
+	// the race detector catches intermittently — it did, in CI, before this.
+	return func() {
+		stopOnce.Do(func() { close(done) })
+		<-exited
+	}
 }
