@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/BAGOMBEKA-JOB-DEV/skyl/security/advisories/new
+    about: Report privately. Do not open a public issue — see SECURITY.md.
+  - name: Question about using skyl
+    url: https://github.com/BAGOMBEKA-JOB-DEV/skyl/blob/main/docs/getting-started.md
+    about: Start here; most usage questions are answered in the docs.

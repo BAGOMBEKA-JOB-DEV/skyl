@@ -1,0 +1,74 @@
+skyl
+Copyright 2026 BAGOMBEKA JOB
+
+This product includes software developed as part of the skyl project
+(https://github.com/BAGOMBEKA-JOB-DEV/skyl), licensed under the Apache License,
+Version 2.0.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+The skyl library itself has no external dependencies. The notices below apply to
+the other modules in this repository, and to binaries built from them.
+
+Several of these licences require their copyright notices to be reproduced when
+the software is redistributed in binary form. That is what this file is for: a
+container image of skyl-gateway must ship it.
+
+github.com/anthropics/anthropic-sdk-go — MIT
+  Copyright 2023 Anthropic, PBC.
+
+github.com/go-chi/chi/v5 — MIT
+  Copyright (c) 2015-present Peter Kieltyka, Google Inc.
+
+github.com/bahlo/generic-list-go — BSD-3-Clause
+  Copyright (c) 2009 The Go Authors. All rights reserved.
+
+github.com/buger/jsonparser — MIT
+  Copyright (c) 2016 Leonid Bugaev
+
+github.com/invopop/jsonschema — MIT
+  Copyright (C) 2014 Alec Thomas
+
+github.com/pb33f/ordered-map/v2 — Apache-2.0
+  Copyright (c) 2022 Will Dixon, Princess Beef Heavy Industries LLC
+
+github.com/standard-webhooks/standard-webhooks/libraries — MIT
+  Copyright (c) 2022 Svix
+
+github.com/tidwall/gjson, /match, /pretty, /sjson — MIT
+  Copyright (c) 2016-2022 Josh Baker
+
+go.yaml.in/yaml/v4 — MIT and Apache-2.0 (per-file)
+  Copyright (c) 2011-2019 Canonical Ltd, and the yaml.v3 authors
+
+golang.org/x/sync, golang.org/x/sys — BSD-3-Clause
+  Copyright (c) 2009 The Go Authors. All rights reserved.
+
+go.opentelemetry.io/otel and related modules — Apache-2.0
+  Copyright The OpenTelemetry Authors
+
+github.com/prometheus/client_golang, /client_model, /common, /procfs — Apache-2.0
+  Copyright the Prometheus Authors
+
+github.com/go-logr/logr, /stdr — Apache-2.0
+  Copyright 2019-2021 The logr Authors
+
+github.com/beorn7/perks — MIT
+  Copyright (C) 2013 Blake Mizerany
+
+github.com/cespare/xxhash/v2 — MIT
+  Copyright (c) 2016 Caleb Spare
+
+github.com/munnerz/goautoneg — BSD-3-Clause
+  Copyright (c) 2011, Open Knowledge Foundation Ltd.
+
+github.com/klauspost/compress — BSD-3-Clause, Apache-2.0, MIT (per-directory)
+  Copyright (c) 2012 The Go Authors; (c) 2019+ Klaus Post
+
+google.golang.org/protobuf — BSD-3-Clause
+  Copyright (c) 2018 The Go Authors. All rights reserved.
+
+Full licence texts are available in each module's source, obtainable through the
+Go module proxy or with `go mod download`.

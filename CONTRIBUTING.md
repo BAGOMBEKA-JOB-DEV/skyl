@@ -14,18 +14,20 @@ go build ./...
 go test -race ./...
 ```
 
-Requires **Go 1.24+** to work on the whole repository — the library alone needs
-only 1.22, but the two adapter modules inherit 1.24 from the SDKs they wrap, and
+Requires **Go 1.25+** to work on the whole repository — the library alone needs
+only 1.22, but `provider/anthropic` inherits 1.24 from the Anthropic SDK, and
+`otel` and `gateway` inherit 1.25 from the OpenTelemetry SDK, and
 CI builds each module against its own floor so a stale `go` directive fails the
 build rather than reaching a user.
 
-There are three modules. A [`go.work`](go.work) workspace ties them together, so
+There are four modules. A [`go.work`](go.work) workspace ties them together, so
 a change spanning the library and an adapter builds without any per-module
 bookkeeping. Each module still has its own suite:
 
 ```bash
 cd provider/anthropic && go test -race ./...
 cd gateway && go test -race ./...
+cd otel && go test -race ./...
 ```
 
 Build each module on its own at least once before opening a pull request — the
@@ -33,7 +35,7 @@ workspace hides a broken cross-module dependency, which is precisely the failure
 that only surfaces when somebody outside this repository runs `go get`:
 
 ```bash
-for m in . provider/anthropic gateway; do (cd $m && GOWORK=off go build ./...); done
+for m in . provider/anthropic gateway otel; do (cd $m && GOWORK=off go build ./...); done
 ```
 
 Releases have their own process and a fixed order; see [RELEASING.md](RELEASING.md).

@@ -2,7 +2,7 @@
 #
 # Prepare a skyl release.
 #
-# skyl is three modules in one repository, and two of them depend on the first.
+# skyl is four modules in one repository, and three of them depend on the first.
 # Go resolves those dependencies through the module proxy, which means a
 # submodule's `require` line must name a version that has actually been tagged.
 # This script rewrites those lines, removes any `replace` directive, and tidies
@@ -50,7 +50,7 @@ export GOWORK=off
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
-step "1/3  root module — $ROOT_MODULE@$VERSION"
+step "1/4  root module — $ROOT_MODULE@$VERSION"
 echo "The root module has no intra-repo dependencies, so it needs no edit."
 echo "Verify, then tag it:"
 echo
@@ -88,7 +88,7 @@ retarget() {
 	)
 }
 
-step "2/3  provider/anthropic"
+step "2/4  provider/anthropic"
 retarget provider/anthropic "$ROOT_MODULE"
 ( cd provider/anthropic && go mod tidy && go build ./... && go test ./... )
 git --no-pager diff --stat provider/anthropic/
@@ -98,7 +98,20 @@ echo "    git tag provider/anthropic/$VERSION && git push origin provider/anthro
 echo
 read -r -p "Press enter once provider/anthropic/$VERSION is pushed, or ctrl-c to stop. "
 
-step "3/3  gateway"
+# otel depends only on the root, so it can be prepared as soon as the root tag
+# is resolvable — it does not have to wait for the adapter.
+step "3/4  otel"
+retarget otel "$ROOT_MODULE"
+( cd otel && go mod tidy && go build ./... && go test ./... )
+git --no-pager diff --stat otel/
+echo
+echo "    git commit -am 'chore: release otel $VERSION'"
+echo "    git tag otel/$VERSION && git push origin otel/$VERSION"
+echo
+read -r -p "Press enter once otel/$VERSION is pushed, or ctrl-c to stop. "
+
+# gateway goes last: it is the only module that depends on another submodule.
+step "4/4  gateway"
 retarget gateway "$ROOT_MODULE"
 retarget gateway "$ROOT_MODULE/provider/anthropic"
 ( cd gateway && go mod tidy && go build ./... && go test ./... )
@@ -113,6 +126,7 @@ Confirm the release is real by installing it from outside this repository:
 
     cd \$(mktemp -d) && go mod init check
     go get $ROOT_MODULE/provider/anthropic@$VERSION
+    go get $ROOT_MODULE/otel@$VERSION
     go get $ROOT_MODULE/gateway@$VERSION
 
 Both must resolve without a replace directive. If either fails, the tag is

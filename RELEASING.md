@@ -1,11 +1,12 @@
 # Releasing skyl
 
-skyl is three Go modules in one repository:
+skyl is four Go modules in one repository:
 
 | Module | Path | Tag prefix |
 |---|---|---|
 | library | `github.com/BAGOMBEKA-JOB-DEV/skyl` | `v0.1.0` |
 | Anthropic adapter | `.../skyl/provider/anthropic` | `provider/anthropic/v0.1.0` |
+| OpenTelemetry | `.../skyl/otel` | `otel/v0.1.0` |
 | gateway | `.../skyl/gateway` | `gateway/v0.1.0` |
 
 Run `scripts/release.sh vX.Y.Z`. It performs every edit below and stops between
@@ -25,8 +26,8 @@ them aligned is far easier to reason about.
 
 ## Why `replace` must go, and why it is not the real problem
 
-Both adapter modules carry a `replace` pointing at a sibling directory so the
-repository builds during development. **A `replace` directive is honoured only
+Every module except the root carries a `replace` pointing at a sibling directory
+so the repository builds during development. **A `replace` directive is honoured only
 in the main module.** When somebody else runs `go get`, their module is the main
 module, so ours is ignored entirely.
 
@@ -50,14 +51,18 @@ So:
 1. Tag and push the **root** module. Nothing else can be prepared until this
    version is resolvable.
 2. Point `provider/anthropic` at it, tidy, commit, tag, push.
-3. Point `gateway` at both, tidy, commit, tag, push.
+3. Point `otel` at it, tidy, commit, tag, push. It depends only on the root, so
+   it does not have to wait for the adapter — but it is sequenced after it so
+   the script has one linear path to follow.
+4. Point `gateway` at the root *and* the adapter, tidy, commit, tag, push. It
+   goes last because it is the only module depending on another submodule.
 
 Between steps 1 and 2 the tree does not build with `GOWORK=off`, because the new
 root version has to be fetched from the proxy. That is inherent to the layout,
 not a fault in it — the workspace covers ordinary development throughout.
 
-Note that both adapter modules' `go.sum` files today contain no entry for the
-root module at all. That is the expected consequence of a directory `replace`:
+Note that the submodules' `go.sum` files today contain no entry for the root
+module at all. That is the expected consequence of a directory `replace`:
 replaced modules get no checksums. They gain one at release, which is a useful
 signal that the rewrite actually happened.
 
@@ -79,6 +84,7 @@ what a user experiences:
 ```bash
 cd $(mktemp -d) && go mod init check
 go get github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic@vX.Y.Z
+go get github.com/BAGOMBEKA-JOB-DEV/skyl/otel@vX.Y.Z
 go get github.com/BAGOMBEKA-JOB-DEV/skyl/gateway@vX.Y.Z
 ```
 

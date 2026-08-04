@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,8 +35,40 @@ type Config struct {
 	// misconfiguration away.
 	AuthToken string
 
+	// AuthTokens are additional accepted tokens, keyed by a label that
+	// identifies the caller in logs and metrics.
+	//
+	// Two tokens accepted at once is what makes rotation possible without a
+	// restart: issue the new one, let callers migrate, retire the old one. A
+	// single token means every rotation is an outage.
+	AuthTokens map[string]string
+
 	// RequestTimeout bounds a single upstream request. Defaults to 120s.
 	RequestTimeout time.Duration
+
+	// MaxConcurrent caps in-flight requests. Zero means unlimited.
+	//
+	// A gateway fronting slow paid APIs holds a goroutine and an upstream
+	// connection for the life of every request, so without a cap a burst is
+	// passed straight through to the provider — and paid for.
+	MaxConcurrent int
+
+	// AllowedOrigins enables CORS for the listed origins. Empty disables it,
+	// which is the right default for a server holding API keys: a browser
+	// reaching it directly would need the bearer token in client-side code.
+	AllowedOrigins []string
+
+	// HeartbeatInterval is how often an idle SSE stream emits a comment frame
+	// to keep intermediaries from reaping it. Defaults to 15s; negative
+	// disables it.
+	//
+	// A reasoning model can think for minutes before its first token, and an
+	// idle proxy will cut a connection long before that.
+	HeartbeatInterval time.Duration
+
+	// MetricsHandler serves /metrics when set. Build one with [NewTelemetry],
+	// which also returns the hook that produces the numbers.
+	MetricsHandler http.Handler
 
 	// Logger receives structured request logs. Defaults to slog.Default().
 	Logger *slog.Logger
@@ -52,6 +86,18 @@ type Server struct {
 	router   chi.Router
 	defaultP string
 	names    []string
+
+	// tokens maps an accepted bearer value to its caller label.
+	tokens map[string]string
+
+	// writeMu serialises SSE writes between the event loop and the heartbeat
+	// goroutine. Without it a keep-alive could land inside a data frame.
+	writeMu sync.Mutex
+
+	// draining is set when shutdown begins, so readiness fails before the
+	// listener stops accepting. An orchestrator needs that window to take the
+	// instance out of rotation while in-flight work finishes.
+	draining atomic.Bool
 }
 
 // NewServer builds a Server.
@@ -86,10 +132,35 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("gateway: default provider %q is not registered", def)
 	}
 
-	s := &Server{cfg: cfg, log: cfg.Logger, defaultP: def, names: names}
+	if cfg.HeartbeatInterval == 0 {
+		cfg.HeartbeatInterval = 15 * time.Second
+	}
+
+	// The primary token plus any rotation tokens, in one lookup keyed by the
+	// full header value so authentication is a single compare per candidate.
+	tokens := map[string]string{"Bearer " + cfg.AuthToken: "default"}
+	for label, tok := range cfg.AuthTokens {
+		if tok == "" {
+			return nil, fmt.Errorf("gateway: auth token %q is empty", label)
+		}
+		tokens["Bearer "+tok] = label
+	}
+
+	s := &Server{cfg: cfg, log: cfg.Logger, defaultP: def, names: names, tokens: tokens}
 	s.router = s.routes()
 	return s, nil
 }
+
+// StartDraining marks the server as not ready.
+//
+// Call it before http.Server.Shutdown: readiness fails immediately, the
+// orchestrator stops sending new traffic, and in-flight requests still finish.
+// Shutdown alone cannot do this — it stops the listener, which looks to a load
+// balancer like a refused connection rather than a planned withdrawal.
+func (s *Server) StartDraining() { s.draining.Store(true) }
+
+// Draining reports whether shutdown has begun.
+func (s *Server) Draining() bool { return s.draining.Load() }
 
 // ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -114,18 +185,44 @@ func (s *Server) routes() chi.Router {
 	// address. A deployment that needs the originating IP should extract it
 	// from a header its own trusted proxy is known to set.
 	r.Use(middleware.RequestID)
+	r.Use(s.echoRequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(s.logRequests)
 
+	// CORS runs before authentication: a preflight OPTIONS carries no
+	// Authorization header, so authenticating it would reject every browser
+	// client before it ever sent the real request.
+	if len(s.cfg.AllowedOrigins) > 0 {
+		r.Use(s.cors)
+	}
+
 	// Liveness is unauthenticated so orchestrators can probe without a
-	// credential. It reveals nothing beyond "the process is up".
+	// credential. It reveals nothing beyond "the process is up", and it stays
+	// green while draining — the process is alive and finishing work, and
+	// failing liveness here would have the orchestrator kill it mid-request.
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
+
+	// Readiness is the one that flips on shutdown.
+	r.Get("/readyz", s.handleReady)
+
+	// Metrics are unauthenticated so an in-cluster scraper needs no
+	// credential. They carry no prompt content — only counts, durations and
+	// the provider/model labels the conventions define.
+	if s.cfg.MetricsHandler != nil {
+		r.Handle("/metrics", s.cfg.MetricsHandler)
+	}
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
+
+		// Concurrency limiting sits inside authentication so unauthenticated
+		// traffic cannot consume the budget, and it is chi's own middleware
+		// rather than a new dependency.
+		if s.cfg.MaxConcurrent > 0 {
+			r.Use(middleware.Throttle(s.cfg.MaxConcurrent))
+		}
 
 		r.Route("/v1", func(r chi.Router) {
 			r.Get("/providers", s.handleProviders)
@@ -138,24 +235,93 @@ func (s *Server) routes() chi.Router {
 	return r
 }
 
+// tenantKey types the context value holding the caller label.
+type tenantKey struct{}
+
+// TenantFrom returns the label of the token that authenticated the request.
+//
+// It is what makes per-caller metrics and log attribution possible without the
+// token itself ever leaving the auth middleware.
+func TenantFrom(ctx context.Context) string {
+	label, _ := ctx.Value(tenantKey{}).(string)
+	return label
+}
+
+// handleReady reports readiness, which is false once draining starts.
+func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+	if s.Draining() {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]any{"status": "draining"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
+}
+
+// echoRequestID returns the request ID to the caller.
+//
+// chi generates one into the context and logs it, but never sets it on the
+// response — so the caller has nothing to quote when reporting a problem.
+func (s *Server) echoRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id := middleware.GetReqID(r.Context()); id != "" {
+			w.Header().Set("X-Request-Id", id)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// cors answers preflights and marks responses for the configured origins.
+func (s *Server) cors(next http.Handler) http.Handler {
+	allowed := make(map[string]bool, len(s.cfg.AllowedOrigins))
+	for _, o := range s.cfg.AllowedOrigins {
+		allowed[o] = true
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		// Echo the specific origin rather than "*": credentials are involved,
+		// and a wildcard cannot carry them.
+		if origin != "" && (allowed[origin] || allowed["*"]) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
 
-// authenticate enforces the bearer token.
+// authenticate enforces the bearer token and labels the caller.
 func (s *Server) authenticate(next http.Handler) http.Handler {
-	want := []byte("Bearer " + s.cfg.AuthToken)
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := []byte(r.Header.Get("Authorization"))
-		// Constant-time compare so a timing side channel cannot reveal the
-		// token one byte at a time.
-		if subtle.ConstantTimeCompare(got, want) != 1 {
+
+		// Every candidate is compared, without an early exit on the first
+		// match: returning as soon as one succeeds would make the time taken
+		// depend on which token was presented, and constant-time comparison
+		// of the individual tokens would not save it.
+		label := ""
+		for want, name := range s.tokens {
+			if subtle.ConstantTimeCompare(got, []byte(want)) == 1 {
+				label = name
+			}
+		}
+		if label == "" {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeError(w, http.StatusUnauthorized, "unauthorized", "auth")
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		next.ServeHTTP(w, r.WithContext(
+			context.WithValue(r.Context(), tenantKey{}, label)))
 	})
 }
 
@@ -175,6 +341,7 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 			"bytes", ww.BytesWritten(),
 			"duration", time.Since(start),
 			"request_id", middleware.GetReqID(r.Context()),
+			"tenant", TenantFrom(r.Context()),
 		)
 	})
 }
@@ -260,8 +427,18 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// nginx buffers proxied responses by default, which turns a stream into
+	// one delivery at the end and quietly removes the only property this
+	// endpoint has. This header is how you tell it not to.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+
+	// A reasoning model can think for minutes before its first token, and an
+	// idle intermediary will reap the connection long before that. A comment
+	// frame keeps it alive and is ignored by any conforming SSE client.
+	stopBeat := s.startHeartbeat(r.Context(), w, flusher)
+	defer stopBeat()
 
 	for stream.Next() {
 		ev := stream.Event()
@@ -288,14 +465,21 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if !writeSSE(w, payload) {
+		s.writeMu.Lock()
+		ok := writeSSE(w, payload)
+		if ok {
+			flusher.Flush()
+		}
+		s.writeMu.Unlock()
+		if !ok {
 			return
 		}
-		flusher.Flush()
 	}
 
 	if err := stream.Err(); err != nil {
 		// Headers are already sent, so the error has to ride the stream.
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
 		_ = writeSSE(w, map[string]any{
 			"type":  "error",
 			"error": err.Error(),
@@ -421,4 +605,45 @@ func kindOf(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// startHeartbeat emits SSE comment frames while the stream is idle, and
+// returns a function that stops it.
+//
+// The writes are serialised with the event loop by a mutex, because a comment
+// interleaved halfway through a data frame would corrupt it. The mutex is the
+// reason this cannot simply be a goroutine writing to w.
+func (s *Server) startHeartbeat(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) func() {
+	if s.cfg.HeartbeatInterval <= 0 {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { close(done) }) }
+
+	go func() {
+		ticker := time.NewTicker(s.cfg.HeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.writeMu.Lock()
+				_, err := fmt.Fprint(w, ": keep-alive\n\n")
+				if err == nil {
+					flusher.Flush()
+				}
+				s.writeMu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	return stop
 }

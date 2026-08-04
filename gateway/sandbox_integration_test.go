@@ -86,7 +86,7 @@ func TestSandboxGatewayChat(t *testing.T) {
 	resp := post(t, base+"/v1/chat", testToken, map[string]any{
 		"provider": "openai",
 		"model":    "gpt-5.6",
-		"messages": []any{map[string]any{"role": "user", "content": "What is the capital of France?"}},
+		"messages": []any{map[string]any{"role": "user", "text": "What is the capital of France?"}},
 	})
 
 	if resp.StatusCode != http.StatusOK {
@@ -134,7 +134,7 @@ func TestSandboxGatewayStream(t *testing.T) {
 	resp := post(t, base+"/v1/chat/stream", testToken, map[string]any{
 		"provider": "openai",
 		"model":    "gpt-5.6",
-		"messages": []any{map[string]any{"role": "user", "content": "What is the capital of France?"}},
+		"messages": []any{map[string]any{"role": "user", "text": "What is the capital of France?"}},
 	})
 
 	if resp.StatusCode != http.StatusOK {
@@ -193,7 +193,7 @@ func TestSandboxGatewayUpstreamError(t *testing.T) {
 	resp := post(t, base+"/v1/chat", testToken, map[string]any{
 		"provider": "openai",
 		"model":    sandbox.StatusModelPrefix + "429",
-		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		"messages": []any{map[string]any{"role": "user", "text": "hi"}},
 	})
 
 	if resp.StatusCode != http.StatusTooManyRequests {
@@ -210,10 +210,96 @@ func TestSandboxGatewayRequiresAuth(t *testing.T) {
 	resp := post(t, base+"/v1/chat", "", map[string]any{
 		"provider": "openai",
 		"model":    "gpt-5.6",
-		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		"messages": []any{map[string]any{"role": "user", "text": "hi"}},
 	})
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 without a token", resp.StatusCode)
+	}
+}
+
+// TestSandboxGatewayToolLoop is the test the gateway most needed and did not
+// have.
+//
+// The wire format used to be unable to express an assistant turn's tool calls,
+// so a caller received one in the response and had no way to send it back —
+// and a provider rejects a tool result that does not follow the call it
+// answers. Nothing caught it, because no gateway test ever attempted the
+// second turn. This one does, over two real sockets.
+func TestSandboxGatewayToolLoop(t *testing.T) {
+	base := newSandboxGateway(t)
+
+	tool := map[string]any{
+		"name":        "get_weather",
+		"description": "Look up the current weather for a city.",
+		"parameters": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"city": map[string]any{"type": "string"}},
+		},
+	}
+	question := map[string]any{"role": "user", "text": "What is the weather in Kampala?"}
+
+	// Turn one: the model asks for the tool.
+	resp := post(t, base+"/v1/chat", testToken, map[string]any{
+		"model":      "gpt-5.6",
+		"max_tokens": 128,
+		"tools":      []any{tool},
+		"messages":   []any{question},
+	})
+	defer resp.Body.Close() //nolint:errcheck // test cleanup
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("first turn = %d (%s)", resp.StatusCode, body)
+	}
+
+	var first ChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&first); err != nil {
+		t.Fatalf("decoding first turn: %v", err)
+	}
+	if first.StopReason != string(skyl.StopToolUse) {
+		t.Errorf("stop_reason = %q, want %q", first.StopReason, skyl.StopToolUse)
+	}
+	if len(first.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1 (text %q)", len(first.ToolCalls), first.Text)
+	}
+
+	// The assistant turn must come back in a shape that can be replayed. This
+	// is the field that did not exist.
+	if len(first.Message.Content) == 0 {
+		t.Fatal("Message.Content is empty; the assistant turn cannot be replayed")
+	}
+
+	// Turn two: run the tool and send the result back, including the assistant
+	// turn verbatim.
+	second := post(t, base+"/v1/chat", testToken, map[string]any{
+		"model":      "gpt-5.6",
+		"max_tokens": 128,
+		"tools":      []any{tool},
+		"messages": []any{
+			question,
+			first.Message,
+			map[string]any{"role": "tool", "content": []any{map[string]any{
+				"type":         "tool_result",
+				"tool_call_id": first.ToolCalls[0].ID,
+				"content":      "22C and sunny",
+			}}},
+		},
+	})
+	defer second.Body.Close() //nolint:errcheck // test cleanup
+
+	if second.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("second turn = %d (%s)", second.StatusCode, body)
+	}
+
+	var final ChatResponse
+	if err := json.NewDecoder(second.Body).Decode(&final); err != nil {
+		t.Fatalf("decoding second turn: %v", err)
+	}
+	// The sandbox echoes the tool's own output, so this proves the result
+	// survived both hops rather than that a canned string came back.
+	if !strings.Contains(final.Text, "22C and sunny") {
+		t.Errorf("second turn text = %q, want it to contain the tool output", final.Text)
 	}
 }

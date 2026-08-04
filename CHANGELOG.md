@@ -30,6 +30,26 @@ what the code needs fails the build rather than reaching a user.
 
 ### Added
 
+- **`skyl/otel`** — OpenTelemetry instrumentation as a fourth module,
+  implementing the GenAI semantic conventions. One line to wire up:
+  `skyl.New(provider, otel.Hook())`. Prompt content is never recorded.
+  ([ADR-0007](docs/adr/0007-otel-is-its-own-module.md))
+- **Streaming token usage is observable.** A terminal `stream_end` hook event
+  reports it, including for a stream the caller abandoned — those tokens were
+  generated and billed regardless, and reporting nothing made that spend
+  invisible.
+- **Gateway**: `/readyz` distinct from `/healthz`, `/metrics` in Prometheus
+  format, graceful drain on SIGTERM, concurrency limiting, rotatable auth
+  tokens with per-caller labels, CORS, SSE keep-alive frames,
+  `X-Accel-Buffering: no`, an echoed `X-Request-Id`, and env vars for every
+  `skyl.Option` — retries and timeouts were previously fixed at their defaults
+  with no way for an operator to see or change them.
+- **Supply chain**: `govulncheck`, CodeQL, OpenSSF Scorecard, Dependabot, SBOM
+  and signed build provenance on release, digest-pinned actions, DCO
+  enforcement, and a single `ci-ok` check for branch protection.
+- **Governance**: `NOTICE`, per-module `LICENSE` files, `CODEOWNERS`,
+  `MAINTAINERS.md`, `CODE_OF_CONDUCT.md`, and issue and PR templates.
+
 **Core library** (`github.com/BAGOMBEKA-JOB-DEV/skyl`)
 
 - `Provider` interface — `Name`, `Complete`, `Stream`, `Models`
@@ -90,6 +110,35 @@ what the code needs fails the build rather than reaching a user.
 
 ### Changed
 
+- **The gateway's chat wire format is redesigned.** `ChatMessage.content` was a
+  string and is now a list of typed parts; a text-only turn may use the new
+  `text` shorthand instead.
+
+  **Migration:** `{"role":"user","content":"hi"}` becomes
+  `{"role":"user","text":"hi"}`. A tool result becomes an explicit part:
+  `{"role":"tool","content":[{"type":"tool_result","tool_call_id":"c1","content":"..."}]}`.
+
+  This is what makes a tool-calling loop possible at all. The old format could
+  not express an assistant turn containing tool calls, so a client received one
+  in the response and had no way to send it back — and every provider rejects a
+  tool result that does not follow the call it answers. The response now also
+  carries `message`, the assistant's turn in the same shape a request takes, so
+  it can be appended and replayed verbatim. `tool_choice`, `thinking`, images
+  and tool-error results are reachable over HTTP for the first time.
+
+  Note `DisallowUnknownFields` is still on: a *new* client against an *old*
+  gateway gets a 400 rather than a silent ignore, so upgrade gateways first.
+
+- **`HookEvent` gained fields and a new operation.** `ResponseID`,
+  `ResponseModel`, `StopReason`, `Completed` and `Request`, plus the
+  `stream_end` operation. Existing hooks keep working; they simply see one more
+  event per stream. `Request` carries the prompt — a hook that logs it verbatim
+  ships conversation content wherever the logs go.
+
+- **The gateway module's Go floor rises to 1.25**, inherited from the
+  OpenTelemetry SDK by way of `skyl/otel`. The library itself is unchanged at
+  1.22, which is the point of the module split.
+
 - **`Usage` now defines its inclusion semantics, and `Usage.TotalTokens()` no
   longer double-counts cached tokens.** `InputTokens` is the total input
   *including* anything served from or written to a cache; `CacheReadTokens` and
@@ -116,6 +165,26 @@ what the code needs fails the build rather than reaching a user.
   `errors.As` are unaffected.
 
 ### Added
+
+- **`skyl/otel`** — OpenTelemetry instrumentation as a fourth module,
+  implementing the GenAI semantic conventions. One line to wire up:
+  `skyl.New(provider, otel.Hook())`. Prompt content is never recorded.
+  ([ADR-0007](docs/adr/0007-otel-is-its-own-module.md))
+- **Streaming token usage is observable.** A terminal `stream_end` hook event
+  reports it, including for a stream the caller abandoned — those tokens were
+  generated and billed regardless, and reporting nothing made that spend
+  invisible.
+- **Gateway**: `/readyz` distinct from `/healthz`, `/metrics` in Prometheus
+  format, graceful drain on SIGTERM, concurrency limiting, rotatable auth
+  tokens with per-caller labels, CORS, SSE keep-alive frames,
+  `X-Accel-Buffering: no`, an echoed `X-Request-Id`, and env vars for every
+  `skyl.Option` — retries and timeouts were previously fixed at their defaults
+  with no way for an operator to see or change them.
+- **Supply chain**: `govulncheck`, CodeQL, OpenSSF Scorecard, Dependabot, SBOM
+  and signed build provenance on release, digest-pinned actions, DCO
+  enforcement, and a single `ci-ok` check for branch protection.
+- **Governance**: `NOTICE`, per-module `LICENSE` files, `CODEOWNERS`,
+  `MAINTAINERS.md`, `CODE_OF_CONDUCT.md`, and issue and PR templates.
 
 - **The sandbox calls tools**, on all three wire protocols, streaming and not.
   Arguments are split mid-token across frames, so an adapter that fails to
