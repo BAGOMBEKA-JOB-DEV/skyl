@@ -46,6 +46,92 @@ type anthropicRequest struct {
 		Role    string `json:"role"`
 		Content any    `json:"content"`
 	} `json:"messages"`
+
+	Tools []struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema map[string]any `json:"input_schema"`
+	} `json:"tools"`
+
+	ToolChoice *struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	} `json:"tool_choice"`
+}
+
+func (r anthropicRequest) toolNames() []string {
+	names := make([]string, 0, len(r.Tools))
+	for _, t := range r.Tools {
+		if t.Name != "" {
+			names = append(names, t.Name)
+		}
+	}
+	return names
+}
+
+// toolChoice maps Anthropic's vocabulary onto the shared one. "any" is what
+// every other provider spells "required".
+func (r anthropicRequest) toolChoice() (mode, forced string) {
+	if r.ToolChoice == nil {
+		return choiceAuto, ""
+	}
+	switch r.ToolChoice.Type {
+	case "none":
+		return choiceNone, ""
+	case "any":
+		return choiceRequired, ""
+	case "tool":
+		return choiceRequired, r.ToolChoice.Name
+	default:
+		return choiceAuto, ""
+	}
+}
+
+// lastToolResult finds a tool_result block. Anthropic has no tool role: results
+// come back as blocks inside an ordinary user turn.
+func (r anthropicRequest) lastToolResult() (string, bool) {
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		m := r.Messages[i]
+		if m.Role != "user" {
+			continue
+		}
+		blocks, ok := m.Content.([]any)
+		if !ok {
+			continue
+		}
+		for _, raw := range blocks {
+			block, ok := raw.(map[string]any)
+			if !ok || block["type"] != "tool_result" {
+				continue
+			}
+			// The real API rejects a tool_result whose tool_use_id does not
+			// match a tool_use block it issued, so an adapter that drops the
+			// correlation must not appear to work here either.
+			if id, _ := block["tool_use_id"].(string); id != toolCallID {
+				return "", false
+			}
+			// tool_result content is either a bare string or an array of
+			// content blocks, and the API accepts both. The official SDK sends
+			// the array form — NewToolResultBlock wraps the string in a text
+			// block — so a sandbox that understood only the string would reject
+			// what its own adapter sends.
+			switch c := block["content"].(type) {
+			case string:
+				return c, true
+			case []any:
+				for _, raw := range c {
+					inner, ok := raw.(map[string]any)
+					if !ok || inner["type"] != "text" {
+						continue
+					}
+					if s, ok := inner["text"].(string); ok {
+						return s, true
+					}
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // lastUserText pulls the newest user text out of the request, tolerating both
@@ -92,7 +178,8 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicError(w, status, "api_error", "sandbox: injected status "+req.Model)
 		return
 	}
-	if !known("anthropic", req.Model) {
+	fault, faulty := streamFault(req.Model)
+	if !faulty && !known("anthropic", req.Model) {
 		anthropicError(w, http.StatusNotFound, "not_found_error",
 			fmt.Sprintf("model: %s", req.Model))
 		return
@@ -107,12 +194,40 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 
 	prompt := req.lastUserText()
 	answer := reply(prompt)
+
+	// A tool result already present means this is the second turn: answer with
+	// it rather than asking for the tool again.
+	var call *toolCall
+	if result, ok := req.lastToolResult(); ok {
+		answer = replyToToolResult(result)
+	} else {
+		mode, forced := req.toolChoice()
+		call = decideToolCall(prompt, req.toolNames(), mode, forced)
+	}
+
 	inTokens := countTokens(prompt)
 	outTokens := countTokens(answer)
 
 	if req.Stream {
-		h.anthropicStream(w, req.Model, answer, inTokens, outTokens)
+		h.anthropicStream(w, req.Model, answer, call, fault, inTokens, outTokens)
 		return
+	}
+
+	content := []any{map[string]any{"type": "text", "text": answer}}
+	stopReason := "end_turn"
+	if call != nil {
+		var input map[string]any
+		// Unlike OpenAI, Anthropic sends tool input as a decoded object rather
+		// than a JSON string. An adapter that confuses the two fails here.
+		_ = json.Unmarshal([]byte(call.Args), &input)
+		content = []any{map[string]any{
+			"type":  "tool_use",
+			"id":    call.ID,
+			"name":  call.Name,
+			"input": input,
+		}}
+		stopReason = "tool_use"
+		outTokens = countTokens(call.Args)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -120,8 +235,8 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		"type":          "message",
 		"role":          "assistant",
 		"model":         req.Model,
-		"content":       []any{map[string]any{"type": "text", "text": answer}},
-		"stop_reason":   "end_turn",
+		"content":       content,
+		"stop_reason":   stopReason,
 		"stop_sequence": nil,
 		"usage": map[string]any{
 			"input_tokens":  inTokens,
@@ -132,7 +247,7 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 
 // anthropicStream emits the documented event sequence. The SDK accumulates
 // these into a message, so the order and the names both matter.
-func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, in, out int) {
+func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int) {
 	flush := beginSSE(w)
 
 	send := func(event string, payload any) {
@@ -165,6 +280,30 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, i
 		"content_block": map[string]any{"type": "text", "text": ""},
 	})
 
+	// Faults fire after the block has opened and one delta has landed, so the
+	// SDK's accumulator is mid-message when the stream dies.
+	switch fault {
+	case FaultTruncate:
+		send("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "text_delta", "text": "par"},
+		})
+		return
+	case FaultMidStreamError:
+		send("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "text_delta", "text": "par"},
+		})
+		send("error", map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "overloaded_error",
+				"message": "sandbox: injected mid-stream failure",
+			},
+		})
+		return
+	}
+
 	for _, piece := range chunk(answer) {
 		send("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
@@ -175,9 +314,36 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, i
 
 	send("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 
+	stopReason := "end_turn"
+	if call != nil {
+		// A tool call is a *second* content block, at index 1. The index was
+		// hardcoded to 0 throughout this file before, which would have let an
+		// adapter that ignores the index entirely pass.
+		stopReason = "tool_use"
+		send("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": 1,
+			"content_block": map[string]any{
+				"type":  "tool_use",
+				"id":    call.ID,
+				"name":  call.Name,
+				"input": map[string]any{},
+			},
+		})
+		for _, frag := range argChunks(call.Args) {
+			send("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": 1,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": frag},
+			})
+		}
+		send("content_block_stop", map[string]any{"type": "content_block_stop", "index": 1})
+		out = countTokens(call.Args)
+	}
+
 	send("message_delta", map[string]any{
 		"type":  "message_delta",
-		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
 		"usage": map[string]any{"output_tokens": out},
 	})
 

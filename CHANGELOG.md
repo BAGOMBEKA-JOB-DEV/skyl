@@ -117,6 +117,27 @@ what the code needs fails the build rather than reaching a user.
 
 ### Added
 
+- **The sandbox calls tools**, on all three wire protocols, streaming and not.
+  Arguments are split mid-token across frames, so an adapter that fails to
+  accumulate them cannot pass; `tool_choice` is honoured, and the second turn
+  answers using the tool's own output. Tool calling was the least validated
+  path in the library — the entire Tools and ToolChoice mapping blocks in
+  `internal/oai` and `provider/gemini` had never been executed by any test.
+- **Mid-stream faults.** Two model IDs, `sandbox-stream-truncate` and
+  `sandbox-stream-error`, make a stream fail *after* it has started — which
+  `sandbox-status-NNN` structurally cannot, since the status is fixed once the
+  SSE header is written. Every adapter's mid-stream error and truncation
+  handling was previously unreachable.
+- `internal/cassette` — records real provider HTTP exchanges and replays them,
+  standard library only. One contributor with a key records; everyone else
+  replays offline, forever. Credentials are scrubbed on write (rules.md §7.2),
+  and a test walks every committed fixture looking for credential-shaped
+  strings. Replay tests are untagged, so they begin asserting in ordinary CI as
+  soon as a recording lands.
+- **`Example` functions** (rules.md §8.3, previously zero) — ten runnable, with
+  verified output.
+- **Benchmarks** on the per-token paths: SSE frame parsing, per-chunk JSON
+  decode, tool-argument accumulation, and payload construction.
 - `docs/roadmap.md` — what stands between this and production use, from an
   audit of the gap between "CI is green" and "a company can adopt this".
 - `RELEASING.md` and `scripts/release.sh` — the multi-module release process,
@@ -165,6 +186,12 @@ what the code needs fails the build rather than reaching a user.
 - **Certificate failures were retried.** A rejected certificate is a
   misconfiguration, not a blip; retrying spent the whole budget to receive the
   same answer and delayed the error the operator needed to see.
+- **Streaming tool-call arguments accumulated quadratically.** Fragments were
+  joined with `+=`, which reallocates and copies the whole accumulated string
+  on every frame — and providers send a frame every few characters. A call with
+  512 fragments allocated 2.2 MB to assemble a few kilobytes. It now uses a
+  `strings.Builder`: 34 KB and 19 allocations for the same input, and linear
+  rather than quadratic. Found by the new benchmark, which stays as the guard.
 
 Both of the following were found by widening test coverage before the first
 release, so neither ever shipped.
