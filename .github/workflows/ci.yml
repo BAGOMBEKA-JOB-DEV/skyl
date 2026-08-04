@@ -3,6 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+    # Release tags are built too, so the publishability gate below actually
+    # runs against the commit being published rather than against main.
+    tags:
+      - "v*"
+      - "provider/anthropic/v*"
+      - "gateway/v*"
   pull_request:
   workflow_dispatch:
 
@@ -11,13 +17,18 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-  # Exact toolchain used to *build* golangci-lint — see the lint job.
-  GO_BUILD_TOOLCHAIN: "go1.26.0"
   GOLANGCI_LINT_VERSION: "v2.12.2"
+
+  # Every job builds each module on its own, never through the workspace. With
+  # go.work active a module resolves its siblings from the local directory, so
+  # a `require` line naming a version that does not exist still builds — and
+  # that is precisely the failure that only shows up once somebody outside this
+  # repository runs `go get`. See RELEASING.md.
+  GOWORK: "off"
 
 jobs:
   build:
-    name: ${{ matrix.module }}
+    name: ${{ matrix.module }} (go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -26,15 +37,38 @@ jobs:
         # library must keep building without the gateway's or Anthropic SDK's
         # dependencies. See docs/adr/0001-two-module-layout.md.
         #
+        # Each module is built twice: once on the oldest Go it claims to
+        # support, once on the newest. A floor that is only ever built with the
+        # current toolchain is a guess — the older job is what turns the `go`
+        # directive from a claim into a tested one. The two adapter modules
+        # cannot go below 1.24 because anthropic-sdk-go declares it, and since
+        # Go 1.21 that is a hard requirement rather than advice.
+        #
         # Coverage floors sit just under the current figure, so a regression
         # fails the build while ordinary refactoring does not. Raise them when
         # coverage rises; never lower one to make a red build go green.
+        # Coverage is measured on the current toolchain only.
         include:
           - module: "."
+            go: "1.22"
+            coverage: false
+          - module: "."
+            go: "1.26"
+            coverage: true
             min_coverage: "80"
           - module: "provider/anthropic"
+            go: "1.24"
+            coverage: false
+          - module: "provider/anthropic"
+            go: "1.26"
+            coverage: true
             min_coverage: "88"
           - module: "gateway"
+            go: "1.24"
+            coverage: false
+          - module: "gateway"
+            go: "1.26"
+            coverage: true
             min_coverage: "78"
 
     steps:
@@ -42,8 +76,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          go-version: ${{ matrix.go }}
+          # The root module has no dependencies and therefore no go.sum, so
+          # naming one would warn on every run. Cache on the file that exists.
+          cache-dependency-path: |
+            ${{ matrix.module }}/go.sum
+            ${{ matrix.module }}/go.mod
 
       - name: gofmt
         working-directory: ${{ matrix.module }}
@@ -82,13 +120,18 @@ jobs:
       # code exercised from a sibling package's test reads as 0% — internal/oai
       # is driven almost entirely by provider/*, and internal/httpx by every
       # adapter. The module-wide profile is the honest measure.
+      #
+      # -count=1 disables the test cache. A cached run replays a truncated
+      # merged coverage profile, which under-reports the module-wide total by
+      # more than twenty points and would fail the floor below for no reason.
       - name: go test (race)
         working-directory: ${{ matrix.module }}
         run: |
-          go test -race -tags=sandbox -coverpkg=./... \
+          go test -count=1 -race -tags=sandbox -coverpkg=./... \
             -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: coverage floor
+        if: matrix.coverage
         working-directory: ${{ matrix.module }}
         run: |
           # Test-support packages are scaffolding, not shipped behaviour. Their
@@ -128,6 +171,51 @@ jobs:
             exit 1
           fi
 
+  # A module published with a `replace` directive is permanently broken, and
+  # nothing about it looks broken from inside this repository: `replace` is
+  # honoured only in the main module, so it keeps working here and is ignored
+  # for everyone else, leaving them with whatever the `require` line says. Tags
+  # on the module proxy are immutable, so this cannot be fixed after the fact —
+  # only fixed forward with a new version. Hence a hard gate rather than a note
+  # in RELEASING.md.
+  #
+  # It runs on tags only. Before the first release the replaces are how the
+  # repository builds at all, since there is no published version for the
+  # require lines to name yet; scripts/release.sh is what removes them, and
+  # this job is what proves it did.
+  releasable:
+    name: modules are publishable
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: no replace directives
+        run: |
+          found=0
+          for mod in provider/anthropic gateway; do
+            if grep -qE '^\s*replace\s' "$mod/go.mod"; then
+              echo "::error file=$mod/go.mod::$mod/go.mod contains a replace directive"
+              grep -nE '^\s*replace\s' "$mod/go.mod"
+              found=1
+            fi
+          done
+          if [ "$found" -eq 1 ]; then
+            echo "Use the go.work workspace for local development instead; see RELEASING.md."
+            exit 1
+          fi
+          echo "no replace directives — modules are publishable"
+
+      # A require on a version that was never tagged fails the same way, and is
+      # what actually breaks the install: the replace above merely hides it.
+      - name: no placeholder versions
+        run: |
+          if grep -rnE 'BAGOMBEKA-JOB-DEV/skyl[^ ]* v0\.0\.0' provider/anthropic/go.mod gateway/go.mod; then
+            echo "::error::a module requires the root at v0.0.0, which will never exist on the proxy"
+            exit 1
+          fi
+          echo "no placeholder versions"
+
   lint:
     name: golangci-lint (${{ matrix.module }})
     runs-on: ubuntu-latest
@@ -142,21 +230,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
-      # golangci-lint refuses to run when the Go version it was *built with* is
-      # older than the Go version the module targets. Every published binary up
-      # to v2.12.2 is built with Go 1.25, so no released artifact can lint a
-      # `go 1.26` module. `go install` alone does not help either: golangci-lint
-      # carries its own `toolchain` directive that pulls the build back to 1.25.
-      # Pinning GOTOOLCHAIN is what actually forces a 1.26 build.
-      #
-      # Revisit once golangci-lint ships binaries built with Go 1.26; this can
-      # then go back to golangci/golangci-lint-action.
-      - name: install golangci-lint
-        run: |
-          GOTOOLCHAIN="$GO_BUILD_TOOLCHAIN" \
-            go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: golangci-lint
-        working-directory: ${{ matrix.module }}
-        run: golangci-lint run --timeout=5m
+      # The published binaries are built with Go 1.25, and golangci-lint refuses
+      # to lint a module targeting a newer Go than it was built with. That used
+      # to require installing it from source with a pinned GOTOOLCHAIN, because
+      # the modules declared `go 1.26`. Now that the floors are 1.22 and 1.24,
+      # the released artifact works and the standard action is enough.
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: ${{ matrix.module }}
+          args: --timeout=5m

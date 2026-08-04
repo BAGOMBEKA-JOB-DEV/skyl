@@ -2,7 +2,9 @@
 
 ## Requirements
 
-- **Go 1.26 or later** (`go version`)
+- **Go 1.22 or later** for the library (`go version`). The `provider/anthropic`
+  and `gateway` modules need **Go 1.24 or later**, inherited from the SDKs they
+  depend on.
 - An API key for at least one provider — or [Ollama](https://ollama.com)
   running locally, which needs no key at all
 

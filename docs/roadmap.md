@@ -16,20 +16,22 @@ was larger than the test suite could see.
 
 Three things dominate everything else:
 
-1. **skyl cannot be installed.** There are no tags, and the `gateway` and
-   `provider/anthropic` modules require the root module at `v0.0.0` behind `replace`
-   directives. Go ignores `replace` in non-main modules, so the install command in the
-   README does not work for anyone outside this repository.
-2. **The `go 1.26` floor is not justified by the code.** Nothing outside `_test.go` files
-   uses anything newer than Go 1.22. The floor already forced a workaround in CI, because
-   no released golangci-lint can lint a `go 1.26` module.
-3. **Some of the rules in [rules.md](rules.md) are not met.** §6.5 requires every adapter
-   to honour `ProviderOptions` — the Anthropic adapter never reads it. §8.3 requires
-   compiling `Example` functions — there are none. §6.1 forbids silently dropping data —
-   `internal/oai` drops assistant content when a host returns a content array.
+1. ~~**skyl cannot be installed.**~~ *(fixed in Phase 2)* There were no tags, and the
+   `gateway` and `provider/anthropic` modules required the root module at `v0.0.0` behind
+   `replace` directives. Go ignores `replace` in non-main modules, so the install command
+   in the README did not work for anyone outside this repository.
+2. ~~**The `go 1.26` floor is not justified by the code.**~~ *(fixed in Phase 2)* Nothing
+   outside `_test.go` files used anything newer than Go 1.22. The floor had already forced
+   a workaround in CI, because no released golangci-lint can lint a `go 1.26` module.
+3. **Some of the rules in [rules.md](rules.md) are not met.** §6.5 required every adapter
+   to honour `ProviderOptions` — the Anthropic adapter never read it. §6.1 forbids
+   silently dropping data — `internal/oai` dropped assistant content when a host returned
+   a content array. Both fixed in Phase 0, the first with a contract-suite check so it
+   cannot regress in one adapter while passing in another. §8.3 requires compiling
+   `Example` functions — there are still none; that is Phase 1.
 
-A rule that is documented and unenforced is worse than no rule, so §6.5 and §6.1 are
-treated here as defects rather than as roadmap items.
+A rule that is documented and unenforced is worse than no rule, so §6.5 and §6.1 were
+treated as defects rather than as roadmap items.
 
 ---
 
@@ -73,16 +75,35 @@ without them.
 - **Meet §8.3 and add benchmarks.** No competing Go library publishes allocation figures;
   measuring a hot path is both a rule and an argument.
 
-## Phase 2 — Make it installable
+## Phase 2 — Make it installable ✅
 
-The cheapest adoption work in this document.
+Done, except for the tagging itself, which is a human decision.
 
-- Lower the Go directive to what the code actually needs.
-- Cut `v0.1.0`, with a release process that drops the `replace` directives and pins real
-  versions at tag time. [ADR-0006](adr/0006-anthropic-adapter-is-its-own-module.md)
-  anticipates this; nothing currently enforces it, so a tag cut today would publish
-  permanently broken modules.
-- Add a CI check that refuses to tag a commit containing a `replace` directive.
+- **Go floors lowered to what the code actually needs**: 1.22 for the library, 1.24 for
+  the two adapter modules. The second number is not a choice — `anthropic-sdk-go` declares
+  `go 1.24`, and since Go 1.21 that is a hard requirement rather than advice, so a module
+  declaring less cannot build it. That split is the right shape anyway: it is the same
+  principle as [ADR-0001](adr/0001-two-module-layout.md), applied to toolchains instead of
+  dependencies. Nobody pays for a vendor SDK they did not ask for, in packages or in Go
+  versions.
+- **CI builds each module against its own floor.** A floor that is only ever built with
+  the newest toolchain is a guess.
+- **`replace` directives replaced by a [`go.work`](../go.work) workspace**, and CI builds
+  with `GOWORK=off`. The `replace` was never the bug — Go ignores it in a non-main module,
+  so it silently *hid* the bug, which is the `require` line naming a version that will
+  never exist.
+- **[RELEASING.md](../RELEASING.md) and `scripts/release.sh`** encode the ordering, which
+  is not optional: each module's `go.sum` needs a checksum for the version below it, and a
+  checksum can only be computed for a version the proxy already serves.
+- **A CI gate refuses to publish a tag carrying a `replace` or a `v0.0.0` require.**
+  [ADR-0006](adr/0006-anthropic-adapter-is-its-own-module.md) anticipated the replaces
+  being dropped at tag time; nothing enforced it, and proxy tags are immutable.
+
+Verified by tagging `v0.1.0` in a disposable clone and installing all three modules from a
+scratch module through a real git resolution — the command in the README, which does not
+work today, then does.
+
+**Remaining:** cut the actual tags. See RELEASING.md.
 
 ## Phase 3 — What an enterprise review asks for
 
