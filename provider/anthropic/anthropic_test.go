@@ -109,11 +109,63 @@ func TestCompleteMapsRequest(t *testing.T) {
 	if captured["max_tokens"] != float64(100) {
 		t.Errorf("max_tokens = %v, want 100", captured["max_tokens"])
 	}
+	// Stop sequences were previously set by this test and never asserted, so
+	// the mapping counted as covered without being checked.
+	stop, ok := captured["stop_sequences"].([]any)
+	if !ok || len(stop) != 1 || stop[0] != "END" {
+		t.Errorf("stop_sequences = %v, want [END]", captured["stop_sequences"])
+	}
 	if resp.StopReason != skyl.StopEndTurn {
 		t.Errorf("StopReason = %q, want %q", resp.StopReason, skyl.StopEndTurn)
 	}
 	if resp.Usage.InputTokens != 9 || resp.Usage.OutputTokens != 3 {
 		t.Errorf("Usage = %+v, want 9/3", resp.Usage)
+	}
+}
+
+// Anthropic reports input_tokens EXCLUDING its two cache counters, while every
+// other adapter reports an input figure that already contains them. skyl.Usage
+// defines InputTokens as the total including cache, so this adapter must add
+// them — otherwise an identical cached conversation reports a different
+// billable input depending on which provider served it.
+func TestCompleteNormalisesCacheTokensIntoInput(t *testing.T) {
+	t.Parallel()
+
+	const cachedBody = `{
+		"id": "msg_1",
+		"type": "message",
+		"role": "assistant",
+		"model": "claude-opus-5",
+		"content": [{"type": "text", "text": "hi"}],
+		"stop_reason": "end_turn",
+		"usage": {
+			"input_tokens": 100,
+			"output_tokens": 5,
+			"cache_read_input_tokens": 800,
+			"cache_creation_input_tokens": 50
+		}
+	}`
+
+	p := newTestProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, cachedBody)
+	})
+
+	resp, err := p.Complete(context.Background(), basicRequest())
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	if got := resp.Usage.InputTokens; got != 950 {
+		t.Errorf("InputTokens = %d, want 950 (100 uncached + 800 read + 50 written)", got)
+	}
+	if got := resp.Usage.CacheReadTokens; got != 800 {
+		t.Errorf("CacheReadTokens = %d, want 800", got)
+	}
+	if got := resp.Usage.CacheWriteTokens; got != 50 {
+		t.Errorf("CacheWriteTokens = %d, want 50", got)
+	}
+	if got := resp.Usage.TotalTokens(); got != 955 {
+		t.Errorf("TotalTokens() = %d, want 955 (950 in + 5 out, cache not double-counted)", got)
 	}
 }
 
@@ -208,7 +260,11 @@ func TestToolResultBecomesUserContent(t *testing.T) {
 	}
 }
 
-func TestUnsupportedPartIsRejectedNotDropped(t *testing.T) {
+// Named for what it actually exercises: a tool call whose arguments are not
+// valid JSON. The adapter's other rejection path — an unknown Part type — is
+// unreachable from outside skyl, because Part is a closed interface
+// (message.go), so only a new Part type added to skyl itself could reach it.
+func TestMalformedToolArgumentsAreRejectedNotDropped(t *testing.T) {
 	t.Parallel()
 
 	p := newTestProvider(t, func(http.ResponseWriter, *http.Request) {
@@ -314,5 +370,185 @@ func TestName(t *testing.T) {
 
 	if got := anthropic.New("k").Name(); got != "anthropic" {
 		t.Errorf("Name() = %q, want anthropic", got)
+	}
+}
+
+// The SDK's accumulator only records a stop reason once message_delta arrives,
+// so a stream cut short before it reached EOF looking exactly like a complete
+// one — the caller kept a truncated answer with a nil error.
+func TestStreamTruncationIsReported(t *testing.T) {
+	t.Parallel()
+
+	frames := []string{
+		`event: message_start
+data: {"type":"message_start","message":{"id":"msg_4","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":5,"output_tokens":0}}}`,
+		`event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Par"}}`,
+		// The connection ends here: no message_delta, no message_stop.
+	}
+
+	p := newTestProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, f := range frames {
+			_, _ = io.WriteString(w, f+"\n\n")
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+		}
+	})
+
+	stream, err := p.Stream(context.Background(), basicRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close() //nolint:errcheck // test cleanup
+
+	var text strings.Builder
+	for stream.Next() {
+		if ev := stream.Event(); ev.Type == skyl.EventTextDelta {
+			text.WriteString(ev.Text)
+		}
+	}
+
+	err = stream.Err()
+	if err == nil {
+		t.Fatal("Err() = nil, want a truncation error")
+	}
+	if !errors.Is(err, skyl.ErrServer) {
+		t.Errorf("Err() = %v, want it to classify as ErrServer", err)
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("Err() = %q, want it to say the response is truncated", err)
+	}
+	if got := text.String(); got != "Par" {
+		t.Errorf("text = %q, want the partial text %q", got, "Par")
+	}
+}
+
+// docs/rules.md §6.5 requires every adapter to honour ProviderOptions. This
+// one did not: buildParams builds a typed SDK struct and simply never read the
+// map, so the documented escape hatch — the only route to cache_control, top_k
+// and beta features — silently did nothing on Anthropic.
+func TestProviderOptionsAreHonoured(t *testing.T) {
+	t.Parallel()
+
+	var captured map[string]any
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_, _ = io.WriteString(w, successBody)
+	})
+
+	req := basicRequest()
+	req.ProviderOptions = map[string]any{
+		"top_k": 40,
+		// The escape hatch must be able to override what skyl chose, not just
+		// add to it.
+		"max_tokens": 4321,
+		"metadata":   map[string]any{"user_id": "u-7"},
+	}
+
+	if _, err := p.Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	if got := captured["top_k"]; got != float64(40) {
+		t.Errorf("top_k = %v, want ProviderOptions merged into the payload", got)
+	}
+	if got := captured["max_tokens"]; got != float64(4321) {
+		t.Errorf("max_tokens = %v, want ProviderOptions to override skyl's value", got)
+	}
+	meta, ok := captured["metadata"].(map[string]any)
+	if !ok || meta["user_id"] != "u-7" {
+		t.Errorf("metadata = %v, want the nested object preserved", captured["metadata"])
+	}
+	// Fields skyl set and the caller did not touch must survive.
+	if got := captured["model"]; got != "claude-opus-5" {
+		t.Errorf("model = %v, want skyl's value left intact", got)
+	}
+}
+
+func TestProviderOptionsApplyToStreaming(t *testing.T) {
+	t.Parallel()
+
+	var captured map[string]any
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	})
+
+	req := basicRequest()
+	req.ProviderOptions = map[string]any{"top_k": 7}
+
+	stream, err := p.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	for stream.Next() { //nolint:revive // draining is the point
+	}
+	_ = stream.Close()
+
+	if got := captured["top_k"]; got != float64(7) {
+		t.Errorf("top_k = %v, want ProviderOptions honoured on the streaming path too", got)
+	}
+}
+
+// Reading only "properties" and "required" discarded the rest of the schema, so
+// a tool defined with $defs/$ref reached Anthropic with dangling references
+// while reaching OpenAI intact — the same skyl.Tool meaning two different
+// things depending on the provider.
+func TestToolSchemaIsPassedThroughWhole(t *testing.T) {
+	t.Parallel()
+
+	var captured map[string]any
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_, _ = io.WriteString(w, successBody)
+	})
+
+	req := basicRequest()
+	req.Tools = []skyl.Tool{{
+		Name:        "lookup",
+		Description: "Look something up",
+		Parameters: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{"where": map[string]any{"$ref": "#/$defs/Place"}},
+			"required":             []string{"where"},
+			"additionalProperties": false,
+			"$defs": map[string]any{
+				"Place": map[string]any{"type": "string", "description": "a place"},
+			},
+		},
+	}}
+
+	if _, err := p.Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	tools := captured["tools"].([]any)
+	schema := tools[0].(map[string]any)["input_schema"].(map[string]any)
+
+	if _, ok := schema["$defs"]; !ok {
+		t.Errorf("input_schema = %v, want $defs preserved — a $ref without it is dangling", schema)
+	}
+	if got, ok := schema["additionalProperties"]; !ok || got != false {
+		t.Errorf("additionalProperties = %v, want false preserved", got)
+	}
+	if _, ok := schema["properties"]; !ok {
+		t.Error("properties was lost")
+	}
+	req0 := schema["required"].([]any)
+	if len(req0) != 1 || req0[0] != "where" {
+		t.Errorf("required = %v, want [where]", req0)
+	}
+	// The struct always emits its own object type; a duplicate would be
+	// invalid JSON Schema.
+	if got := schema["type"]; got != "object" {
+		t.Errorf("type = %v, want exactly one \"object\"", got)
 	}
 }

@@ -253,6 +253,114 @@ func TestCompleteRejectsEmptyChoices(t *testing.T) {
 	}
 }
 
+// vLLM, some Azure deployments, and several OpenRouter upstreams return the
+// assistant's content as an array of blocks rather than a bare string — the
+// same shape they accept on the request side. Reading only the string case
+// produced a successful response with no text at all, which looks to a caller
+// like a model that ignored the question.
+func TestCompleteReadsArrayShapedContent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "single text block",
+			body: `{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}]}`,
+			want: "hello",
+		},
+		{
+			name: "several blocks are concatenated",
+			body: `{"choices":[{"message":{"role":"assistant","content":[` +
+				`{"type":"text","text":"hello "},{"type":"text","text":"world"}]}}]}`,
+			want: "hello world",
+		},
+		{
+			name: "non-text blocks are skipped, text still surfaces",
+			body: `{"choices":[{"message":{"role":"assistant","content":[` +
+				`{"type":"image_url","image_url":{"url":"http://x"}},{"type":"text","text":"caption"}]}}]}`,
+			want: "caption",
+		},
+		{
+			name: "block without an explicit type is treated as text",
+			body: `{"choices":[{"message":{"role":"assistant","content":[{"text":"bare"}]}}]}`,
+			want: "bare",
+		},
+		{
+			name: "plain string still works",
+			body: `{"choices":[{"message":{"role":"assistant","content":"plain"}}]}`,
+			want: "plain",
+		},
+		{
+			name: "null content is not an error",
+			body: `{"choices":[{"message":{"role":"assistant","content":null}}]}`,
+			want: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, tc.body)
+			})
+
+			resp, err := c.Complete(context.Background(), basicRequest())
+			if err != nil {
+				t.Fatalf("Complete() error = %v", err)
+			}
+			if got := resp.Text(); got != tc.want {
+				t.Errorf("Text() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The same shape arrives on the streaming path, where an empty stream is even
+// harder to diagnose: it ends cleanly with a terminal event and no output.
+func TestStreamReadsArrayShapedDeltas(t *testing.T) {
+	t.Parallel()
+
+	frames := []string{
+		`{"choices":[{"delta":{"content":[{"type":"text","text":"a"}]}}]}`,
+		`{"choices":[{"delta":{"content":[{"type":"text","text":"b"}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`[DONE]`,
+	}
+
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, f := range frames {
+			_, _ = io.WriteString(w, "data: "+f+"\n\n")
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+		}
+	})
+
+	stream, err := c.Stream(context.Background(), basicRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close() //nolint:errcheck // test cleanup
+
+	var text strings.Builder
+	for stream.Next() {
+		if ev := stream.Event(); ev.Type == skyl.EventTextDelta {
+			text.WriteString(ev.Text)
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("Err() = %v, want nil", err)
+	}
+	if got := text.String(); got != "ab" {
+		t.Errorf("streamed text = %q, want %q", got, "ab")
+	}
+}
+
 func TestCompleteHandlesErrorInBodyWith200(t *testing.T) {
 	t.Parallel()
 
@@ -554,5 +662,142 @@ func TestStreamCancellationStopsPromptly(t *testing.T) {
 	// Draining a cancelled stream must terminate rather than hang; the -race
 	// build and the test timeout together catch a leaked reader.
 	for s.Next() {
+	}
+}
+
+// A dropped connection mid-generation reaches EOF looking exactly like a
+// completed stream: the SSE reader reports no error, so the adapter used to
+// emit a clean terminal event and hand back a truncated answer the caller had
+// no way to distinguish from a whole one.
+func TestStreamTruncationIsReported(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		frames   []string
+		wantErr  bool
+		wantText string
+	}{
+		{
+			name:     "cut off with no terminal signal",
+			frames:   []string{`{"choices":[{"delta":{"content":"par"}}]}`},
+			wantErr:  true,
+			wantText: "par",
+		},
+		{
+			name: "finish_reason alone is a complete stream",
+			frames: []string{
+				`{"choices":[{"delta":{"content":"hi"}}]}`,
+				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			},
+			wantErr:  false,
+			wantText: "hi",
+		},
+		{
+			name: "[DONE] alone is a complete stream",
+			frames: []string{
+				`{"choices":[{"delta":{"content":"hi"}}]}`,
+				`[DONE]`,
+			},
+			wantErr:  false,
+			wantText: "hi",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, f := range tc.frames {
+					_, _ = io.WriteString(w, "data: "+f+"\n\n")
+					if fl, ok := w.(http.Flusher); ok {
+						fl.Flush()
+					}
+				}
+			})
+
+			stream, err := c.Stream(context.Background(), basicRequest())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			defer stream.Close() //nolint:errcheck // test cleanup
+
+			var text strings.Builder
+			for stream.Next() {
+				if ev := stream.Event(); ev.Type == skyl.EventTextDelta {
+					text.WriteString(ev.Text)
+				}
+			}
+
+			err = stream.Err()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Err() = nil, want a truncation error")
+				}
+				if !errors.Is(err, skyl.ErrServer) {
+					t.Errorf("Err() = %v, want it to classify as ErrServer", err)
+				}
+				if !strings.Contains(err.Error(), "truncated") {
+					t.Errorf("Err() = %q, want it to say the response is truncated", err)
+				}
+			} else if err != nil {
+				t.Fatalf("Err() = %v, want nil for a properly terminated stream", err)
+			}
+
+			// The partial text read so far is still delivered — the caller
+			// needs both the fragment and the fact that it is a fragment.
+			if got := text.String(); got != tc.wantText {
+				t.Errorf("text = %q, want %q", got, tc.wantText)
+			}
+		})
+	}
+}
+
+// A content_filter finish_reason with no content used to return a successful
+// response holding an empty string, so a caller reading Text() saw a model
+// that had apparently ignored the question. ErrRefusal existed but no adapter
+// ever produced it, which left the gateway's 422 branch unreachable.
+func TestRefusalWithNoContentIsAnError(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []string{"content_filter", "refusal"} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w,
+					`{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"`+reason+`"}]}`)
+			})
+
+			_, err := c.Complete(context.Background(), basicRequest())
+			if !errors.Is(err, skyl.ErrRefusal) {
+				t.Errorf("err = %v, want ErrRefusal", err)
+			}
+		})
+	}
+}
+
+// A refusal that still produced text is a normal response: the caller gets the
+// partial answer and StopRefusal to explain it, rather than an error that
+// throws the text away.
+func TestRefusalWithContentIsReturnedNormally(t *testing.T) {
+	t.Parallel()
+
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w,
+			`{"choices":[{"message":{"role":"assistant","content":"I can't help with that."},"finish_reason":"content_filter"}]}`)
+	})
+
+	resp, err := c.Complete(context.Background(), basicRequest())
+	if err != nil {
+		t.Fatalf("Complete() error = %v, want the partial answer returned", err)
+	}
+	if resp.StopReason != skyl.StopRefusal {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, skyl.StopRefusal)
+	}
+	if resp.Text() == "" {
+		t.Error("Text() is empty; the model's explanation must not be discarded")
 	}
 }

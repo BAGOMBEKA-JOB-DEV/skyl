@@ -111,6 +111,21 @@ func WithRetryDelay(base, max time.Duration) Option {
 	}
 }
 
+// WithRetryAfterCap bounds how long a provider's own Retry-After hint may
+// delay a retry.
+//
+// It is separate from [WithRetryDelay]'s max, which caps only skyl's computed
+// backoff: a provider asking for 60 seconds is a normal rate-limit window and
+// should be honoured, while a provider asking for an hour should not silently
+// wedge the caller. Non-positive values are ignored. The default is 5 minutes.
+func WithRetryAfterCap(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.policy.retryAfterCap = d
+		}
+	}
+}
+
 // WithTimeout bounds a single attempt.
 //
 // It applies per attempt, not to the whole retry sequence — bound that with
@@ -141,9 +156,10 @@ func New(p Provider, opts ...Option) *Client {
 	c := &Client{
 		provider: p,
 		policy: retryPolicy{
-			maxRetries: defaultMaxRetries,
-			baseDelay:  defaultBaseDelay,
-			maxDelay:   defaultMaxDelay,
+			maxRetries:    defaultMaxRetries,
+			baseDelay:     defaultBaseDelay,
+			maxDelay:      defaultMaxDelay,
+			retryAfterCap: defaultRetryAfterCap,
 		},
 		timeout: defaultTimeout,
 	}

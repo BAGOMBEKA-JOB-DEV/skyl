@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -84,6 +85,35 @@ func (p *Provider) Name() string { return providerName }
 // Request mapping
 // ---------------------------------------------------------------------------
 
+// providerOptions renders [skyl.Request.ProviderOptions] as per-request SDK
+// options.
+//
+// The SDK takes a typed params struct, so unlike the map-based adapters there
+// is nothing to merge into. option.WithJSONSet writes into the encoded body
+// after the struct has been marshalled, which gives exactly the semantics
+// docs/rules.md §6.5 requires: the caller's fields are applied last and
+// override anything skyl chose.
+//
+// Keys are sorted so a given ProviderOptions map always produces the same
+// request — map iteration order would otherwise make overlapping keys resolve
+// differently between runs.
+func providerOptions(opts map[string]any) []option.RequestOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(opts))
+	for k := range opts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]option.RequestOption, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, option.WithJSONSet(k, opts[k]))
+	}
+	return out
+}
+
 func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens <= 0 {
@@ -132,6 +162,15 @@ func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 					schema.Properties = props
 				}
 				schema.Required = requiredNames(t.Parameters["required"])
+
+				// Everything else in the schema rides along in ExtraFields.
+				// Reading only properties and required silently discarded
+				// $defs, $ref, oneOf, additionalProperties and the rest — so
+				// a schema generated from a Go struct or an OpenAPI document
+				// reached Anthropic with dangling references while reaching
+				// OpenAI intact. The same skyl.Tool must mean the same thing
+				// on every provider; that is the point of the library.
+				schema.ExtraFields = extraSchemaFields(t.Parameters)
 			}
 			tool := sdk.ToolParam{Name: t.Name, InputSchema: schema}
 			if t.Description != "" {
@@ -170,6 +209,25 @@ func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 	}
 
 	return params, nil
+}
+
+// extraSchemaFields returns every schema key the typed struct does not model.
+//
+// "type" is dropped because ToolInputSchemaParam always emits "object" itself,
+// and setting it twice produces a duplicate key in the encoded body.
+func extraSchemaFields(params map[string]any) map[string]any {
+	var extra map[string]any
+	for k, v := range params {
+		switch k {
+		case "properties", "required", "type":
+			continue
+		}
+		if extra == nil {
+			extra = make(map[string]any, len(params))
+		}
+		extra[k] = v
+	}
+	return extra
 }
 
 // requiredNames extracts a JSON Schema "required" list.
@@ -284,12 +342,21 @@ func partsFromMessage(msg *sdk.Message) []skyl.Part {
 	return parts
 }
 
+// usageFrom maps SDK usage onto skyl's, normalising the inclusion semantics.
+//
+// Anthropic reports input_tokens EXCLUDING both cache counters, while OpenAI
+// and Gemini report an input count that already contains them. skyl.Usage
+// defines InputTokens as the total with cache included, so the two cache
+// figures are added here — without this, a cached Anthropic request reports an
+// input count that omits most of the prompt it was actually billed for.
 func usageFrom(u sdk.Usage) skyl.Usage {
+	cacheRead := int(u.CacheReadInputTokens)
+	cacheWrite := int(u.CacheCreationInputTokens)
 	return skyl.Usage{
-		InputTokens:      int(u.InputTokens),
+		InputTokens:      int(u.InputTokens) + cacheRead + cacheWrite,
 		OutputTokens:     int(u.OutputTokens),
-		CacheReadTokens:  int(u.CacheReadInputTokens),
-		CacheWriteTokens: int(u.CacheCreationInputTokens),
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
 	}
 }
 
@@ -300,7 +367,7 @@ func (p *Provider) Complete(ctx context.Context, req *skyl.Request) (*skyl.Respo
 		return nil, err
 	}
 
-	msg, err := p.client.Messages.New(ctx, params)
+	msg, err := p.client.Messages.New(ctx, params, providerOptions(req.ProviderOptions)...)
 	if err != nil {
 		return nil, translateError(err)
 	}
@@ -356,8 +423,9 @@ func translateError(err error) error {
 
 	var apiErr *sdk.Error
 	if !errors.As(err, &apiErr) {
-		// No HTTP response: a dial failure, a reset, a cancelled context.
-		return &skyl.Error{Provider: providerName, Message: err.Error()}
+		// No HTTP response: a dial failure, a reset, a cancelled context. The
+		// cause is retained so errors.Is still reaches it.
+		return (&skyl.Error{Provider: providerName, Message: err.Error()}).WithCause(err)
 	}
 
 	e := skyl.NewError(
@@ -384,7 +452,7 @@ func (p *Provider) Stream(ctx context.Context, req *skyl.Request) (skyl.Stream, 
 		return nil, err
 	}
 
-	sdkStream := p.client.Messages.NewStreaming(ctx, params)
+	sdkStream := p.client.Messages.NewStreaming(ctx, params, providerOptions(req.ProviderOptions)...)
 	// NewStreaming defers the request, so a handshake failure surfaces on the
 	// first read rather than here. Check for it now so that skyl's Client can
 	// retry a failed handshake instead of handing back a dead stream.
@@ -449,6 +517,16 @@ func (s *stream) Next() bool {
 
 	if err := s.sdk.Err(); err != nil {
 		s.err = translateError(err)
+		return false
+	}
+
+	// The accumulator only records a stop reason once message_delta arrives,
+	// so an empty one at EOF means the stream ended mid-generation. Returning
+	// success here would hand the caller a truncated response that looks
+	// exactly like a complete one.
+	if s.acc.StopReason == "" && !s.flushed {
+		s.err = skyl.NewError(providerName, 0, skyl.ErrServer,
+			"stream ended without a terminal event; the response is truncated", nil)
 		return false
 	}
 

@@ -145,8 +145,29 @@ func TestUsageAddAndTotal(t *testing.T) {
 	if sum != want {
 		t.Errorf("Add() = %+v, want %+v", sum, want)
 	}
-	if got := a.TotalTokens(); got != 18 {
-		t.Errorf("TotalTokens() = %d, want 18", got)
+	// Cache figures are a breakdown of InputTokens, not an addition to it, so
+	// the total is input+output only. Adding them again inflated the count for
+	// every provider whose input figure already includes its cache hits.
+	if got := a.TotalTokens(); got != 15 {
+		t.Errorf("TotalTokens() = %d, want 15 (input+output; cache is part of input)", got)
+	}
+}
+
+// Regression: the three adapters disagreed about whether cached tokens were
+// part of the input count, so the same cached conversation reported a different
+// billable input depending on the provider it was routed to.
+func TestUsageCacheTokensAreIncludedInInput(t *testing.T) {
+	t.Parallel()
+
+	// A request where most of the prompt was served from cache.
+	u := Usage{InputTokens: 1000, OutputTokens: 50, CacheReadTokens: 900}
+
+	if got := u.TotalTokens(); got != 1050 {
+		t.Errorf("TotalTokens() = %d, want 1050 — cache reads are already in InputTokens", got)
+	}
+	if u.CacheReadTokens > u.InputTokens {
+		t.Errorf("CacheReadTokens (%d) exceeds InputTokens (%d); cache is a breakdown of input",
+			u.CacheReadTokens, u.InputTokens)
 	}
 }
 

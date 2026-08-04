@@ -163,6 +163,25 @@ func (p *Provider) buildPayload(req *skyl.Request) (map[string]any, error) {
 	if len(req.Stop) > 0 {
 		gen["stopSequences"] = req.Stop
 	}
+	if th := req.Thinking; th != nil {
+		// Gemini expresses reasoning as a token budget inside
+		// generationConfig. A nil Thinking leaves the model's default alone;
+		// an explicit &Thinking{Enabled: false} means off, and a budget of
+		// zero is how Gemini spells that — without this, disabling reasoning
+		// silently did nothing and the caller kept paying for it.
+		tc := map[string]any{}
+		if th.Enabled {
+			if budget, ok := thinkingBudget(th.Effort); ok {
+				tc["thinkingBudget"] = budget
+			} else {
+				// No effort given: -1 lets the model decide how much to spend.
+				tc["thinkingBudget"] = -1
+			}
+		} else {
+			tc["thinkingBudget"] = 0
+		}
+		gen["thinkingConfig"] = tc
+	}
 	if len(gen) > 0 {
 		payload["generationConfig"] = gen
 	}
@@ -201,6 +220,27 @@ func (p *Provider) buildPayload(req *skyl.Request) (map[string]any, error) {
 	}
 
 	return httpx.Merge(payload, req.ProviderOptions), nil
+}
+
+// thinkingBudget maps skyl's effort hint onto a Gemini thinking budget.
+//
+// The numbers are a coarse translation of an intentionally coarse hint —
+// [skyl.Effort] is documented as advisory, not a contract. A caller who needs
+// an exact budget sets thinkingConfig through ProviderOptions, which is merged
+// last and wins.
+func thinkingBudget(e skyl.Effort) (int, bool) {
+	switch e {
+	case skyl.EffortLow:
+		return 1024, true
+	case skyl.EffortMedium:
+		return 8192, true
+	case skyl.EffortHigh:
+		return 16384, true
+	case skyl.EffortMax:
+		return 24576, true
+	default:
+		return 0, false
+	}
 }
 
 func convertMessage(idx int, m skyl.Message) (wireContent, error) {
@@ -366,6 +406,8 @@ func (p *Provider) Complete(ctx context.Context, req *skyl.Request) (*skyl.Respo
 		Model:      model,
 		Message:    skyl.Message{Role: skyl.RoleAssistant, Parts: parts},
 		StopReason: mapFinishReason(cand.FinishReason, hasCalls),
+		// cachedContentTokenCount is already part of promptTokenCount, which is
+		// the inclusion rule skyl.Usage defines — so these map across directly.
 		Usage: skyl.Usage{
 			InputTokens:     wire.UsageMetadata.PromptTokenCount,
 			OutputTokens:    wire.UsageMetadata.CandidatesTokenCount,
@@ -429,8 +471,10 @@ func (p *Provider) Models(ctx context.Context) ([]skyl.ModelInfo, error) {
 // Errors
 // ---------------------------------------------------------------------------
 
+// transportError wraps a failure that never produced an HTTP response, keeping
+// the cause reachable through errors.Is.
 func (p *Provider) transportError(err error) error {
-	return &skyl.Error{Provider: providerName, Message: err.Error()}
+	return (&skyl.Error{Provider: providerName, Message: err.Error()}).WithCause(err)
 }
 
 func (p *Provider) httpError(resp *http.Response) error {
@@ -493,6 +537,12 @@ type stream struct {
 	flushed    bool
 	done       bool
 	closed     bool
+
+	// sawTerminal records that a candidate carried a finishReason. Gemini has
+	// no [DONE] sentinel, so that is the only promise the response is whole —
+	// without it, a connection dropped mid-generation reaches EOF looking
+	// exactly like a completed stream.
+	sawTerminal bool
 }
 
 func (s *stream) Next() bool {
@@ -534,6 +584,7 @@ func (s *stream) Next() bool {
 		parts, hasCalls := partsFromCandidate(cand.Content)
 		if cand.FinishReason != "" {
 			s.stopReason = mapFinishReason(cand.FinishReason, hasCalls)
+			s.sawTerminal = true
 		}
 
 		for _, part := range parts {
@@ -558,7 +609,15 @@ func (s *stream) Next() bool {
 	}
 
 	if err := s.reader.Err(); err != nil {
-		s.err = &skyl.Error{Provider: providerName, Message: err.Error()}
+		s.err = (&skyl.Error{Provider: providerName, Message: err.Error()}).WithCause(err)
+		return false
+	}
+
+	// A stream that ends without any finishReason was cut short; reporting
+	// success would hand back a partial answer that looks complete.
+	if !s.sawTerminal && !s.flushed {
+		s.err = skyl.NewError(providerName, 0, skyl.ErrServer,
+			"stream ended without a terminal event; the response is truncated", nil)
 		return false
 	}
 

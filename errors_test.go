@@ -1,7 +1,10 @@
 package skyl
 
 import (
+	"context"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -174,5 +177,71 @@ func TestUnsupportedf(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "image URLs") {
 		t.Errorf("Error() = %q, want it to name what was unsupported", err.Error())
+	}
+}
+
+// A transport failure used to be flattened into a message string, so a caller
+// could not tell a timeout from a DNS failure from a rejected certificate —
+// errors.Is(err, context.DeadlineExceeded) returned false for a request that
+// had plainly timed out.
+func TestErrorUnwrapsBothKindAndCause(t *testing.T) {
+	t.Parallel()
+
+	e := (&Error{Provider: "openai", Message: "context deadline exceeded"}).
+		WithCause(fmt.Errorf("dialing: %w", context.DeadlineExceeded))
+
+	if !errors.Is(e, context.DeadlineExceeded) {
+		t.Error("errors.Is did not reach the wrapped cause")
+	}
+	if e.Cause() == nil {
+		t.Error("Cause() = nil, want the underlying error")
+	}
+
+	// Both the sentinel and the cause must be reachable through one value.
+	classified := NewError("openai", 429, ErrRateLimit, "slow down", nil).
+		WithCause(context.Canceled)
+	if !errors.Is(classified, ErrRateLimit) {
+		t.Error("errors.Is did not reach the sentinel once a cause was attached")
+	}
+	if !errors.Is(classified, context.Canceled) {
+		t.Error("errors.Is did not reach the cause alongside the sentinel")
+	}
+
+	// An error with neither must not claim to wrap anything.
+	if got := (&Error{Provider: "p"}).Unwrap(); got != nil {
+		t.Errorf("Unwrap() = %v, want nil when there is no kind and no cause", got)
+	}
+}
+
+// Retrying a rejected certificate spends the whole budget to receive the same
+// answer, and delays the error the operator actually needs to see.
+func TestCertificateFailuresAreNotRetried(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unknown authority", x509.UnknownAuthorityError{}},
+		{"hostname mismatch", x509.HostnameError{Host: "example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Message is set by hand rather than from tc.err.Error(): an
+			// x509.HostnameError with no Certificate panics when formatted,
+			// and the message is not what is under test here.
+			wrapped := (&Error{Provider: "openai", Message: "tls failure"}).WithCause(tc.err)
+			if shouldRetry(wrapped) {
+				t.Errorf("shouldRetry(%s) = true, want false — it will fail identically", tc.name)
+			}
+		})
+	}
+
+	// A plain connection reset is still worth another attempt.
+	reset := (&Error{Provider: "openai", Message: "connection reset by peer"}).
+		WithCause(errors.New("connection reset by peer"))
+	if !shouldRetry(reset) {
+		t.Error("shouldRetry(connection reset) = false, want true")
 	}
 }

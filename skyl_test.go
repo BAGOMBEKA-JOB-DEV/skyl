@@ -81,9 +81,57 @@ func validRequest() *Request {
 }
 
 // fastClient keeps retry backoff negligible so tests stay quick.
+//
+// The Retry-After cap is pinned too: a fake that sends the header would
+// otherwise hold the suite for the provider's requested seconds.
 func fastClient(p Provider, opts ...Option) *Client {
-	base := []Option{WithRetryDelay(time.Microsecond, time.Millisecond)}
+	base := []Option{
+		WithRetryDelay(time.Microsecond, time.Millisecond),
+		WithRetryAfterCap(time.Millisecond),
+	}
 	return New(p, append(base, opts...)...)
+}
+
+// A provider's Retry-After was clamped to maxDelay, so the common case — a
+// 429 asking for the standard 60-second window while backoff is capped at the
+// 30-second default — retried inside a window the provider had already said
+// was closed, and spent the whole retry budget collecting the same 429.
+func TestBackoffHonoursRetryAfterBeyondMaxDelay(t *testing.T) {
+	t.Parallel()
+
+	p := retryPolicy{
+		maxRetries:    defaultMaxRetries,
+		baseDelay:     defaultBaseDelay,
+		maxDelay:      defaultMaxDelay, // 30s
+		retryAfterCap: defaultRetryAfterCap,
+	}
+
+	if got := p.backoff(0, 60*time.Second); got != 60*time.Second {
+		t.Errorf("backoff with Retry-After 60s = %v, want 60s honoured in full", got)
+	}
+
+	// An unreasonable hint is still bounded, so a misbehaving provider cannot
+	// wedge the caller.
+	if got := p.backoff(0, time.Hour); got != defaultRetryAfterCap {
+		t.Errorf("backoff with Retry-After 1h = %v, want it capped at %v", got, defaultRetryAfterCap)
+	}
+
+	// With no hint, the computed delay still respects maxDelay.
+	for range 50 {
+		if got := p.backoff(20, 0); got > defaultMaxDelay {
+			t.Fatalf("computed backoff = %v, want <= %v", got, defaultMaxDelay)
+		}
+	}
+}
+
+func TestWithRetryAfterCapIgnoresNonPositive(t *testing.T) {
+	t.Parallel()
+
+	c := New(&fakeProvider{}, WithRetryAfterCap(0), WithRetryAfterCap(-time.Second))
+	if c.policy.retryAfterCap != defaultRetryAfterCap {
+		t.Errorf("retryAfterCap = %v, want the default %v left intact",
+			c.policy.retryAfterCap, defaultRetryAfterCap)
+	}
 }
 
 func TestNewPanicsOnNilProvider(t *testing.T) {
