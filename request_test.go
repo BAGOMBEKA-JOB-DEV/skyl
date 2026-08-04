@@ -237,17 +237,31 @@ func TestBackoffJitters(t *testing.T) {
 func TestBackoffHonoursRetryAfter(t *testing.T) {
 	t.Parallel()
 
-	p := retryPolicy{baseDelay: time.Millisecond, maxDelay: time.Minute}
+	// This test previously asserted that a Retry-After hint was clamped to
+	// maxDelay. That was the bug, not the contract: with the 30s default,
+	// the standard 60s rate-limit window was truncated to 30s and every retry
+	// landed inside a window the provider had already said was closed.
+	// Retry-After now has its own, larger bound.
+	p := retryPolicy{
+		baseDelay:     time.Millisecond,
+		maxDelay:      time.Minute,
+		retryAfterCap: 10 * time.Minute,
+	}
 
 	got := p.backoff(0, 5*time.Second)
 	if got != 5*time.Second {
 		t.Errorf("backoff with Retry-After = %v, want exactly 5s", got)
 	}
 
-	// A hint longer than maxDelay must still be capped, so a provider cannot
-	// wedge the caller for an hour.
-	if got := p.backoff(0, time.Hour); got != p.maxDelay {
-		t.Errorf("backoff with a 1h hint = %v, want it capped at %v", got, p.maxDelay)
+	// A hint beyond the computed ceiling is honoured in full...
+	if got := p.backoff(0, 5*time.Minute); got != 5*time.Minute {
+		t.Errorf("backoff with a 5m hint = %v, want it honoured despite maxDelay %v", got, p.maxDelay)
+	}
+
+	// ...but only up to retryAfterCap, so a provider cannot wedge the caller
+	// for an hour.
+	if got := p.backoff(0, time.Hour); got != p.retryAfterCap {
+		t.Errorf("backoff with a 1h hint = %v, want it capped at %v", got, p.retryAfterCap)
 	}
 }
 

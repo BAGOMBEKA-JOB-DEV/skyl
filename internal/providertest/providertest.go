@@ -13,7 +13,9 @@ package providertest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,6 +74,7 @@ func (s Suite) Run(t *testing.T) {
 	t.Run(s.Name+"/reports provider name", s.testProviderName)
 	t.Run(s.Name+"/reads model from response", s.testModelFromResponse)
 	t.Run(s.Name+"/accepts any model id", s.testAnyModelID)
+	t.Run(s.Name+"/honours ProviderOptions", s.testProviderOptions)
 	t.Run(s.Name+"/classifies errors", s.testErrorClassification)
 	t.Run(s.Name+"/never leaks the credential", s.testCredentialNeverLeaks)
 	t.Run(s.Name+"/honours context cancellation", s.testContextCancellation)
@@ -183,6 +186,39 @@ func (s Suite) testAnyModelID(t *testing.T) {
 		if _, err := p.Complete(context.Background(), req); err != nil {
 			t.Errorf("Complete() rejected model %q: %v", model, err)
 		}
+	}
+}
+
+// docs/rules.md §6.5: ProviderOptions is the caller's escape hatch, and it is
+// only an escape hatch if it actually reaches the wire. An adapter that builds
+// a typed request struct rather than a map can forget it silently — which is
+// exactly what provider/anthropic did — so the check belongs here, where every
+// adapter runs it, rather than in one adapter's own tests.
+func (s Suite) testProviderOptions(t *testing.T) {
+	var captured map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(s.SuccessBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	req := s.request()
+	// A key no adapter models, so reaching the payload proves passthrough
+	// rather than coincidence.
+	req.ProviderOptions = map[string]any{"skyl_test_passthrough": "reached"}
+
+	if _, err := s.New(srv.URL).Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if captured == nil {
+		t.Fatal("the request body could not be decoded")
+	}
+	if got := captured["skyl_test_passthrough"]; got != "reached" {
+		t.Errorf("ProviderOptions did not reach the payload (got %v); "+
+			"docs/rules.md §6.5 requires every adapter to honour it", got)
 	}
 }
 

@@ -78,7 +78,27 @@ type Error struct {
 	// Body is the raw error payload, truncated. Useful when a provider
 	// reports something skyl does not model.
 	Body string
+
+	// Cause is the underlying error, for failures that had one — a dial
+	// timeout, a TLS failure, a cancelled context. It is unexported because it
+	// is reached through [errors.Is] and [errors.As] rather than read
+	// directly; see [Error.Unwrap].
+	cause error
 }
+
+// WithCause returns a copy of e carrying err as its underlying cause.
+//
+// Adapters use it for transport failures so that a caller can still write
+// errors.Is(err, context.DeadlineExceeded) — flattening the cause into a
+// message string loses exactly the information that tells a timeout apart from
+// a DNS failure or a rejected certificate.
+func (e *Error) WithCause(err error) *Error {
+	e.cause = err
+	return e
+}
+
+// Cause returns the underlying error, or nil when there was none.
+func (e *Error) Cause() error { return e.cause }
 
 // Error implements the error interface.
 func (e *Error) Error() string {
@@ -104,9 +124,24 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-// Unwrap returns the sentinel this error classifies as, so [errors.Is]
-// matches it.
-func (e *Error) Unwrap() error { return e.Kind }
+// Unwrap returns the errors this one wraps: the sentinel it classifies as, and
+// the underlying cause when there was one.
+//
+// Returning both means errors.Is matches a skyl sentinel and a wrapped
+// standard error alike — errors.Is(err, ErrRateLimit) and
+// errors.Is(err, context.DeadlineExceeded) both work through the same value.
+func (e *Error) Unwrap() []error {
+	switch {
+	case e.Kind != nil && e.cause != nil:
+		return []error{e.Kind, e.cause}
+	case e.Kind != nil:
+		return []error{e.Kind}
+	case e.cause != nil:
+		return []error{e.cause}
+	default:
+		return nil
+	}
+}
 
 // Retryable reports whether retrying could plausibly succeed.
 //

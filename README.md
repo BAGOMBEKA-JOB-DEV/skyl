@@ -119,6 +119,7 @@ Importing the core library never pulls in chi. See
 | [docs/providers.md](docs/providers.md) | Provider coverage and model discovery |
 | [docs/gateway.md](docs/gateway.md) | The chi HTTP gateway |
 | [docs/project-plan.md](docs/project-plan.md) | Milestones, scope, and status |
+| [docs/roadmap.md](docs/roadmap.md) | What stands between this and production use |
 | [docs/rules.md](docs/rules.md) | Engineering rules every change must satisfy |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to propose and land a change |

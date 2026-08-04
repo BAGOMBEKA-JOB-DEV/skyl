@@ -46,6 +46,17 @@ func main() {
 }
 ```
 
+`Usage.InputTokens` is the total input, *including* anything served from or
+written to a prompt cache; `CacheReadTokens` and `CacheWriteTokens` break that
+total down rather than adding to it. So `InputTokens` is what you are billed
+for and `CacheReadTokens` is how much of it was discounted — and
+`TotalTokens()` is simply input plus output.
+
+Providers disagree about this on the wire, which is exactly why skyl picks one
+rule and makes every adapter obey it. Without that, the same cached
+conversation reports a different billable input depending on which provider
+served it.
+
 ## Switching providers
 
 The only line that changes is the constructor.
