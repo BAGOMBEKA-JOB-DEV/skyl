@@ -34,7 +34,11 @@ type geminiRequest struct {
 	Contents []struct {
 		Role  string `json:"role"`
 		Parts []struct {
-			Text string `json:"text"`
+			Text             string `json:"text"`
+			FunctionResponse *struct {
+				Name     string         `json:"name"`
+				Response map[string]any `json:"response"`
+			} `json:"functionResponse"`
 		} `json:"parts"`
 	} `json:"contents"`
 
@@ -43,6 +47,74 @@ type geminiRequest struct {
 			Text string `json:"text"`
 		} `json:"parts"`
 	} `json:"systemInstruction"`
+
+	Tools []struct {
+		FunctionDeclarations []struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			Parameters  map[string]any `json:"parameters"`
+		} `json:"functionDeclarations"`
+	} `json:"tools"`
+
+	ToolConfig *struct {
+		FunctionCallingConfig *struct {
+			Mode                 string   `json:"mode"`
+			AllowedFunctionNames []string `json:"allowedFunctionNames"`
+		} `json:"functionCallingConfig"`
+	} `json:"toolConfig"`
+}
+
+func (r geminiRequest) toolNames() []string {
+	var names []string
+	for _, t := range r.Tools {
+		for _, d := range t.FunctionDeclarations {
+			if d.Name != "" {
+				names = append(names, d.Name)
+			}
+		}
+	}
+	return names
+}
+
+// toolChoice maps Gemini's functionCallingConfig onto the shared vocabulary.
+// Gemini spells "required" as ANY, and expresses "one specific tool" as ANY
+// plus a one-element allow list rather than as its own mode.
+func (r geminiRequest) toolChoice() (mode, forced string) {
+	if r.ToolConfig == nil || r.ToolConfig.FunctionCallingConfig == nil {
+		return choiceAuto, ""
+	}
+	cfg := r.ToolConfig.FunctionCallingConfig
+	switch cfg.Mode {
+	case "NONE":
+		return choiceNone, ""
+	case "ANY":
+		if len(cfg.AllowedFunctionNames) == 1 {
+			return choiceRequired, cfg.AllowedFunctionNames[0]
+		}
+		return choiceRequired, ""
+	default:
+		return choiceAuto, ""
+	}
+}
+
+// lastToolResult finds a functionResponse part. Gemini has no tool role and no
+// call IDs — it correlates purely by function name, which is why the adapter
+// sets ToolCall.ID to the name.
+func (r geminiRequest) lastToolResult() (string, bool) {
+	for i := len(r.Contents) - 1; i >= 0; i-- {
+		for _, p := range r.Contents[i].Parts {
+			if p.FunctionResponse == nil {
+				continue
+			}
+			if p.FunctionResponse.Name == "" {
+				return "", false
+			}
+			if s, ok := p.FunctionResponse.Response["content"].(string); ok {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }
 
 func (r geminiRequest) lastUserText() string {
@@ -96,7 +168,8 @@ func (h *Handler) geminiGenerate(w http.ResponseWriter, r *http.Request) {
 		geminiError(w, status, "UNKNOWN", "sandbox: injected status "+model)
 		return
 	}
-	if !known("gemini", model) {
+	fault, faulty := streamFault(model)
+	if !faulty && !known("gemini", model) {
 		geminiError(w, http.StatusNotFound, "NOT_FOUND",
 			fmt.Sprintf("models/%s is not found for API version v1beta", model))
 		return
@@ -104,22 +177,49 @@ func (h *Handler) geminiGenerate(w http.ResponseWriter, r *http.Request) {
 
 	prompt := req.lastUserText()
 	answer := reply(prompt)
+
+	// A tool result already present means this is the second turn: answer with
+	// it rather than asking for the tool again.
+	var call *toolCall
+	if result, ok := req.lastToolResult(); ok {
+		answer = replyToToolResult(result)
+	} else {
+		mode, forced := req.toolChoice()
+		call = decideToolCall(prompt, req.toolNames(), mode, forced)
+	}
+
 	inTokens := countTokens(prompt)
 	outTokens := countTokens(answer)
 
 	if method == "streamGenerateContent" {
-		h.geminiStream(w, model, answer, inTokens, outTokens)
+		h.geminiStream(w, model, answer, call, fault, inTokens, outTokens)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, geminiPayload(model, answer, "STOP", inTokens, outTokens))
+	parts := []any{map[string]any{"text": answer}}
+	if call != nil {
+		var args map[string]any
+		// Gemini sends arguments as a decoded object under "args", not as a
+		// JSON string and not under "arguments".
+		_ = json.Unmarshal([]byte(call.Args), &args)
+		parts = []any{map[string]any{
+			"functionCall": map[string]any{"name": call.Name, "args": args},
+		}}
+		outTokens = countTokens(call.Args)
+	}
+
+	writeJSON(w, http.StatusOK, geminiPayload(model, parts, "STOP", inTokens, outTokens))
 }
 
-func geminiPayload(model, text, finish string, in, out int) map[string]any {
+// geminiPayload builds a response around whatever parts the turn produced.
+//
+// It takes parts rather than a bare string because a Gemini turn is not always
+// text: a functionCall is a part like any other, and a turn can carry both.
+func geminiPayload(model string, parts []any, finish string, in, out int) map[string]any {
 	candidate := map[string]any{
 		"content": map[string]any{
 			"role":  "model",
-			"parts": []any{map[string]any{"text": text}},
+			"parts": parts,
 		},
 		"index": 0,
 	}
@@ -141,22 +241,10 @@ func geminiPayload(model, text, finish string, in, out int) map[string]any {
 
 // geminiStream emits alt=sse frames: bare `data:` records, no event names, and
 // no [DONE] sentinel — the stream simply ends.
-func (h *Handler) geminiStream(w http.ResponseWriter, model, answer string, in, out int) {
+func (h *Handler) geminiStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int) {
 	flush := beginSSE(w)
 
-	pieces := chunk(answer)
-	for i, piece := range pieces {
-		// Only the final frame carries finishReason and usage, matching the
-		// real API — an adapter that reads them from the first frame would
-		// pass against a fake that repeated them everywhere.
-		finish := ""
-		payload := geminiPayload(model, piece, finish, 0, 0)
-		if i == len(pieces)-1 {
-			payload = geminiPayload(model, piece, "STOP", in, out)
-		} else {
-			delete(payload, "usageMetadata")
-		}
-
+	send := func(payload map[string]any) {
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return
@@ -164,6 +252,56 @@ func (h *Handler) geminiStream(w http.ResponseWriter, model, answer string, in, 
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		flush()
 		time.Sleep(streamDelay)
+	}
+
+	text := func(s string) []any { return []any{map[string]any{"text": s}} }
+
+	// Gemini has no [DONE] sentinel, so a finishReason is the only signal that
+	// the response is whole — which is exactly what makes truncation here worth
+	// simulating.
+	switch fault {
+	case FaultTruncate:
+		p := geminiPayload(model, text("par"), "", 0, 0)
+		delete(p, "usageMetadata")
+		send(p)
+		return
+	case FaultMidStreamError:
+		p := geminiPayload(model, text("par"), "", 0, 0)
+		delete(p, "usageMetadata")
+		send(p)
+		send(map[string]any{"error": map[string]any{
+			"code": 503, "status": "UNAVAILABLE",
+			"message": "sandbox: injected mid-stream failure",
+		}})
+		return
+	}
+
+	if call != nil {
+		var args map[string]any
+		_ = json.Unmarshal([]byte(call.Args), &args)
+		// One frame carrying *two* parts: a preamble and the call. Real models
+		// do this, and it is the only way to exercise an adapter that has to
+		// queue more than one event from a single frame.
+		parts := []any{
+			map[string]any{"text": "Checking. "},
+			map[string]any{"functionCall": map[string]any{"name": call.Name, "args": args}},
+		}
+		send(geminiPayload(model, parts, "STOP", in, countTokens(call.Args)))
+		return
+	}
+
+	pieces := chunk(answer)
+	for i, piece := range pieces {
+		// Only the final frame carries finishReason and usage, matching the
+		// real API — an adapter that reads them from the first frame would
+		// pass against a fake that repeated them everywhere.
+		payload := geminiPayload(model, text(piece), "", 0, 0)
+		if i == len(pieces)-1 {
+			payload = geminiPayload(model, text(piece), "STOP", in, out)
+		} else {
+			delete(payload, "usageMetadata")
+		}
+		send(payload)
 	}
 }
 

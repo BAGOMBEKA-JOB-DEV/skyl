@@ -543,8 +543,15 @@ func (c *Client) Stream(ctx context.Context, req *skyl.Request) (skyl.Stream, er
 		provider: c.cfg.Name,
 		body:     httpResp.Body,
 		reader:   sse.NewReader(httpResp.Body),
-		pending:  make(map[int]*wireToolCall),
+		pending:  make(map[int]*pendingCall),
 	}, nil
+}
+
+// pendingCall accumulates one tool call as its fragments arrive.
+type pendingCall struct {
+	id   string
+	name string
+	args strings.Builder
 }
 
 // stream decodes an SSE chat-completions response.
@@ -562,7 +569,7 @@ type stream struct {
 
 	// pending buffers tool-call fragments by index. Arguments arrive as
 	// partial JSON across many events, so a call is only emitted once whole.
-	pending map[int]*wireToolCall
+	pending map[int]*pendingCall
 	order   []int
 
 	usage      skyl.Usage
@@ -654,6 +661,13 @@ func (s *stream) Next() bool {
 }
 
 // accumulate folds a tool-call delta into the pending buffer.
+//
+// Arguments go into a strings.Builder rather than being appended with +=.
+// Concatenation reallocates and copies the whole accumulated string on every
+// fragment, which is quadratic in the number of frames — and providers send one
+// frame per few characters, so a tool call with a large argument object was
+// allocating megabytes to assemble a few kilobytes. A benchmark covers it:
+// BenchmarkAccumulateToolArguments.
 func (s *stream) accumulate(tc wireToolCall) {
 	idx := 0
 	if tc.Index != nil {
@@ -661,17 +675,17 @@ func (s *stream) accumulate(tc wireToolCall) {
 	}
 	cur, ok := s.pending[idx]
 	if !ok {
-		cur = &wireToolCall{}
+		cur = &pendingCall{}
 		s.pending[idx] = cur
 		s.order = append(s.order, idx)
 	}
 	if tc.ID != "" {
-		cur.ID = tc.ID
+		cur.id = tc.ID
 	}
 	if tc.Function.Name != "" {
-		cur.Function.Name = tc.Function.Name
+		cur.name = tc.Function.Name
 	}
-	cur.Function.Arguments += tc.Function.Arguments
+	cur.args.WriteString(tc.Function.Arguments)
 }
 
 // finish drains buffered tool calls, then emits the terminal event.
@@ -681,10 +695,14 @@ func (s *stream) finish() bool {
 		s.order = s.order[1:]
 		call := s.pending[idx]
 		delete(s.pending, idx)
-		if call == nil || call.Function.Name == "" {
+		if call == nil || call.name == "" {
 			continue
 		}
-		mapped := toolCallFromWire(*call)
+		args := json.RawMessage(call.args.String())
+		if len(args) == 0 {
+			args = json.RawMessage("{}")
+		}
+		mapped := skyl.ToolCall{ID: call.id, Name: call.name, Arguments: args}
 		s.ev = skyl.StreamEvent{Type: skyl.EventToolCall, ToolCall: &mapped}
 		return true
 	}

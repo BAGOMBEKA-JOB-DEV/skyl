@@ -52,7 +52,36 @@ regression test that fails before the fix.
 | Truncated streams look complete | A connection dropped mid-generation returns a partial answer with a nil error |
 | Refusals are reported as success | `content_filter` maps to `StopRefusal` but returns no error, so `ErrRefusal` is never produced and the gateway's 422 branch is unreachable |
 
-## Phase 1 — Prove correctness without credentials
+## Phase 1 — Prove correctness without credentials ✅
+
+Done, with the exception noted at the end.
+
+- **The sandbox calls tools**, on all three wire protocols, streaming and not, with
+  arguments split mid-token across frames so an adapter that never accumulates cannot
+  pass. It honours `tool_choice`, answers the second turn using the tool's own output, and
+  refuses to call a tool the caller forbade.
+- **Streams can fail mid-flight.** Two fault-injecting model IDs —
+  `sandbox-stream-truncate` and `sandbox-stream-error` — fire after the response has begun,
+  which `sandbox-status-NNN` structurally could not. Every adapter's mid-stream error and
+  truncation handling was dead code before this.
+- **The dead mapping blocks are covered.** `buildPayload` in both `internal/oai` and
+  `provider/gemini` went from ~60% to 100%; tools, tool choice, images, `TopP`,
+  `Temperature`, `Stop`, `reasoning_effort` and request-side `ToolCall` all have
+  assertions now.
+- **`internal/cassette`** records real provider exchanges and replays them, standard
+  library only. Credentials are scrubbed on write, and a test walks committed fixtures
+  looking for anything credential-shaped.
+- **Examples and benchmarks exist** (rules.md §8.3, and the project-plan item). Ten
+  runnable examples with verified output; benchmarks on the per-token paths.
+
+Coverage: root 85.4% → 89.0%, `provider/anthropic` 92.6% → 94.6%. Floors raised to match.
+
+**The honest limit:** cassettes cannot be recorded here, because that needs a provider
+key. The replay half is tested; the record half is not. Until somebody runs
+`SKYL_RECORD=1` with a real credential, no adapter has still ever spoken to a real
+provider, and the caveat in the README stands unchanged.
+
+## Phase 1 — original scope
 
 The README says it plainly: every fake in the test suite was written from the same
 provider documentation as the adapter it tests, so a wrong field name leaves both green.
