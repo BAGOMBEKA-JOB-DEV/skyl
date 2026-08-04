@@ -18,7 +18,16 @@
 # vendor/
 
 # Go workspace file
-go.work
+#
+# go.work is deliberately NOT ignored. The stock Go template ignores it because
+# a workspace usually points at directories outside the repository, which are
+# personal to whoever made it. Ours points only at this repository's own three
+# modules, so it is the shared development setup — it replaces the `replace`
+# directives that used to live in each go.mod, and CONTRIBUTING.md tells people
+# to use it. Ignoring it would mean every contributor recreating it by hand.
+#
+# go.work.sum stays ignored: it is derived, and each module's own go.sum is the
+# checksum record that actually ships.
 go.work.sum
 
 # env file

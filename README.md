@@ -48,7 +48,9 @@ skyl does that once, properly, with tests.
 go get github.com/BAGOMBEKA-JOB-DEV/skyl
 ```
 
-Requires **Go 1.26+**. The core module has **zero external dependencies**.
+Requires **Go 1.22+**, and the core module has **zero external dependencies** —
+so it imposes neither a dependency graph nor a recent toolchain on you. The
+adapter modules below need **Go 1.24+**, because the vendor SDKs they wrap do.
 
 The Anthropic adapter is a separate module, because it uses the official
 Anthropic SDK and that brings a dozen transitive dependencies nobody else
