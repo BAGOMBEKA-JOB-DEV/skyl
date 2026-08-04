@@ -18,6 +18,7 @@ import (
 
 	"github.com/BAGOMBEKA-JOB-DEV/skyl"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/sandbox"
+	"github.com/BAGOMBEKA-JOB-DEV/skyl/internal/testutil"
 	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/openai"
 
 	"net/http/httptest"
@@ -54,7 +55,7 @@ func TestSandboxRetriesServerErrors(t *testing.T) {
 		skyl.WithRetryDelay(time.Millisecond, 10*time.Millisecond),
 	)
 
-	_, err := client.Complete(t.Context(), sandboxRequest(sandbox.StatusModelPrefix+"500"))
+	_, err := client.Complete(testutil.Context(t), sandboxRequest(sandbox.StatusModelPrefix+"500"))
 	if err == nil {
 		t.Fatal("expected an error from an injected 500")
 	}
@@ -79,7 +80,7 @@ func TestSandboxDoesNotRetryClientErrors(t *testing.T) {
 		skyl.WithRetryDelay(time.Millisecond, 10*time.Millisecond),
 	)
 
-	_, err := client.Complete(t.Context(), sandboxRequest(sandbox.StatusModelPrefix+"400"))
+	_, err := client.Complete(testutil.Context(t), sandboxRequest(sandbox.StatusModelPrefix+"400"))
 	if err == nil {
 		t.Fatal("expected an error from an injected 400")
 	}
@@ -102,7 +103,7 @@ func TestSandboxDoesNotRetryAuthErrors(t *testing.T) {
 		skyl.WithRetryDelay(time.Millisecond, 10*time.Millisecond),
 	)
 
-	_, err := client.Complete(t.Context(), sandboxRequest("gpt-5.6"))
+	_, err := client.Complete(testutil.Context(t), sandboxRequest("gpt-5.6"))
 	if err == nil {
 		t.Fatal("expected an auth error")
 	}
@@ -122,7 +123,7 @@ func TestSandboxParsesRetryAfter(t *testing.T) {
 
 	p := openai.New(sandbox.DefaultAPIKey, openai.WithBaseURL(base+"/openai/v1"))
 
-	_, err := p.Complete(t.Context(), sandboxRequest(sandbox.StatusModelPrefix+"429"))
+	_, err := p.Complete(testutil.Context(t), sandboxRequest(sandbox.StatusModelPrefix+"429"))
 	if err == nil {
 		t.Fatal("expected an error from an injected 429")
 	}
@@ -151,7 +152,7 @@ func TestSandboxCancellationStopsRetrying(t *testing.T) {
 		skyl.WithRetryDelay(2*time.Second, 5*time.Second),
 	)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testutil.Context(t), 150*time.Millisecond)
 	defer cancel()
 
 	_, err := client.Complete(ctx, sandboxRequest(sandbox.StatusModelPrefix+"503"))
@@ -171,7 +172,7 @@ func TestSandboxStreamHandshakeError(t *testing.T) {
 
 	p := openai.New(sandbox.DefaultAPIKey, openai.WithBaseURL(base+"/openai/v1"))
 
-	stream, err := p.Stream(t.Context(), sandboxRequest(sandbox.StatusModelPrefix+"429"))
+	stream, err := p.Stream(testutil.Context(t), sandboxRequest(sandbox.StatusModelPrefix+"429"))
 	if err == nil {
 		_ = stream.Close()
 		t.Fatal("Stream() returned no error on an injected 429")

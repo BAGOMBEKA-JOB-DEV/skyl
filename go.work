@@ -1,0 +1,23 @@
+// Workspace for local development across skyl's three modules.
+//
+// It exists so that a change spanning the library and an adapter builds without
+// each module needing a `replace` pointing at a sibling directory. That matters
+// because a `replace` is ignored by anyone whose main module is their own — so
+// a published module carrying one still resolves its `require` line from the
+// proxy, and a wrong `require` is invisible until someone outside this
+// repository tries to install it. A workspace cannot make that mistake: Go
+// never consults go.work when skyl is a dependency.
+//
+// CI therefore builds each module with GOWORK=off, which is the only way to
+// check that every module resolves on its own. See RELEASING.md.
+//
+// The directive is 1.24 rather than the root module's 1.22 because a workspace
+// must be at least as new as every member, and the two adapter modules are
+// pinned there by the Anthropic SDK.
+go 1.24.0
+
+use (
+	.
+	./gateway
+	./provider/anthropic
+)
