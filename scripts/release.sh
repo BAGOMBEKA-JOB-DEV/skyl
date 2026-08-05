@@ -48,6 +48,20 @@ fi
 # module resolves through the proxy.
 export GOWORK=off
 
+# Pin the toolchain unless the caller has an opinion.
+#
+# The modules declare floors of 1.22, 1.24 and 1.25.0. With GOTOOLCHAIN=auto and
+# an older `go` on PATH, Go tries to fetch a toolchain named by the `go`
+# directive — `go1.24`, which is not a release name — and fails with
+# "toolchain not available" in the middle of a release. Naming a real patch
+# release avoids that, and keeps every module on one toolchain besides.
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.25.0}"
+if ! go version >/dev/null 2>&1; then
+	echo "error: GOTOOLCHAIN=$GOTOOLCHAIN is not usable here" >&2
+	echo "hint: set GOTOOLCHAIN to a toolchain you have, at least go1.25.0" >&2
+	exit 1
+fi
+
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
 step "1/4  root module — $ROOT_MODULE@$VERSION"
@@ -61,15 +75,30 @@ read -r -p "Press enter once $VERSION is pushed and resolvable, or ctrl-c to sto
 # Wait for the proxy to serve it. Without this the tidy below fails with a
 # confusing 'unknown revision' that looks like a broken tag rather than a cold
 # cache.
+#
+# The lookup runs against a THROWAWAY module cache. Using the real one made this
+# check answer from local state: a tag that had been created, fetched and later
+# deleted still resolved from the module cache and from Go's VCS clone under
+# $GOMODCACHE/cache/vcs, so the script reported "resolved." for a version that
+# did not exist on the proxy at all — and then failed two steps later, somewhere
+# that looked unrelated. A release gate that can pass on a phantom is worse than
+# no gate.
 step "waiting for the proxy to serve $ROOT_MODULE@$VERSION"
+probe_cache="$(mktemp -d)"
+trap 'chmod -R u+w "$probe_cache" 2>/dev/null; rm -rf "$probe_cache"' EXIT
 for attempt in $(seq 1 30); do
-	if go list -m "$ROOT_MODULE@$VERSION" >/dev/null 2>&1; then
+	# GOTOOLCHAIN=local keeps the probe from re-downloading a toolchain into
+	# the empty cache on every attempt — resolving a version needs no
+	# particular language version, and thirty downloads would be absurd.
+	if GOMODCACHE="$probe_cache" GOFLAGS=-mod=mod GOTOOLCHAIN=local \
+		go list -m "$ROOT_MODULE@$VERSION" >/dev/null 2>&1; then
 		echo "resolved."
 		break
 	fi
 	if [[ $attempt -eq 30 ]]; then
 		echo "error: $ROOT_MODULE@$VERSION is still not resolvable" >&2
-		echo "hint: GOPROXY may be caching; try GOPRIVATE or wait and re-run" >&2
+		echo "hint: confirm the tag is pushed —" >&2
+		echo "      git ls-remote --tags origin | grep $VERSION" >&2
 		exit 1
 	fi
 	sleep 10
