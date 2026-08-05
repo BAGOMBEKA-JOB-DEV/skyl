@@ -6,6 +6,8 @@
 
 **One Go interface for every AI model.**
 
+📖 **[skyl-docs.vercel.app](https://skyl-docs.vercel.app/)** — the documentation site.
+
 skyl is a small, dependency-light Go library that lets you talk to Claude, GPT,
 Gemini, and 400+ other models through a single, stable interface — then switch
 between them by changing one string.
@@ -116,6 +118,18 @@ Importing the core library never pulls in chi. See
 [ADR-0003](docs/adr/0003-gateway-as-separate-module.md).
 
 ## Documentation
+
+The **[documentation site](https://skyl-docs.vercel.app/)** is the friendliest
+way in: a *Learn* track to read in order, and a *Reference* track with one page
+per symbol. It is built from
+[BAGOMBEKA-JOB-DEV/skyl_docs](https://github.com/BAGOMBEKA-JOB-DEV/skyl_docs) —
+a separate repository, so a docs change never touches the library's release
+history. Corrections to the site belong there; corrections to the files below
+belong here.
+
+The documents in this repository stay authoritative for anything a decision
+depends on — the feature matrix, the threat model, the ADRs — because they are
+versioned with the code they describe.
 
 | Document | What it covers |
 |---|---|
