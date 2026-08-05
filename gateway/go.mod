@@ -3,9 +3,9 @@ module github.com/BAGOMBEKA-JOB-DEV/skyl/gateway
 go 1.25.0
 
 require (
-	github.com/BAGOMBEKA-JOB-DEV/skyl v0.0.0
-	github.com/BAGOMBEKA-JOB-DEV/skyl/otel v0.0.0
-	github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic v0.0.0
+	github.com/BAGOMBEKA-JOB-DEV/skyl v0.1.0
+	github.com/BAGOMBEKA-JOB-DEV/skyl/otel v0.1.0
+	github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic v0.1.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/prometheus/client_golang v1.24.1
 	go.opentelemetry.io/otel/exporters/prometheus v0.67.0
@@ -43,9 +43,3 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/BAGOMBEKA-JOB-DEV/skyl => ..
-
-replace github.com/BAGOMBEKA-JOB-DEV/skyl/otel => ../otel
-
-replace github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic => ../provider/anthropic
