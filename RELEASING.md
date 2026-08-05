@@ -54,8 +54,11 @@ So:
 3. Point `otel` at it, tidy, commit, tag, push. It depends only on the root, so
    it does not have to wait for the adapter — but it is sequenced after it so
    the script has one linear path to follow.
-4. Point `gateway` at the root *and* the adapter, tidy, commit, tag, push. It
-   goes last because it is the only module depending on another submodule.
+4. Point `gateway` at the root, the adapter **and** `otel`, tidy, commit, tag,
+   push. It goes last because it is the only module depending on other
+   submodules — and it depends on both of them. Miss one and the published
+   module carries a `v0.0.0` require that nobody outside this repository can
+   resolve.
 
 Between steps 1 and 2 the tree does not build with `GOWORK=off`, because the new
 root version has to be fetched from the proxy. That is inherent to the layout,

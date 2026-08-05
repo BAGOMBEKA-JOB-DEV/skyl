@@ -110,10 +110,25 @@ echo "    git tag otel/$VERSION && git push origin otel/$VERSION"
 echo
 read -r -p "Press enter once otel/$VERSION is pushed, or ctrl-c to stop. "
 
-# gateway goes last: it is the only module that depends on another submodule.
+# gateway goes last: it is the only module that depends on other submodules, and
+# it depends on BOTH of them. Missing one leaves a v0.0.0 require behind a
+# replace that consumers never see, which publishes a module nobody can install
+# — and the tag is immutable by the time anyone finds out.
 step "4/4  gateway"
 retarget gateway "$ROOT_MODULE"
 retarget gateway "$ROOT_MODULE/provider/anthropic"
+retarget gateway "$ROOT_MODULE/otel"
+
+# Belt and braces: the loop above is easy to leave stale when a module is added,
+# which is exactly what happened when otel was introduced. Fail loudly here
+# rather than at the immutable tag.
+if grep -qE '^\s*replace\s' gateway/go.mod ||
+	grep -qE "$ROOT_MODULE[^ ]* v0\.0\.0" gateway/go.mod; then
+	echo "error: gateway/go.mod still has a replace or a v0.0.0 require:" >&2
+	grep -nE "^\s*replace\s|$ROOT_MODULE[^ ]* v0\.0\.0" gateway/go.mod >&2
+	echo "hint: a repository module was added without updating this script" >&2
+	exit 1
+fi
 ( cd gateway && go mod tidy && go build ./... && go test ./... )
 git --no-pager diff --stat gateway/
 echo

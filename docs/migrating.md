@@ -209,6 +209,8 @@ Read the [feature matrix](feature-matrix.md), particularly the
 [silently ignored](feature-matrix.md#silently-ignored-the-important-column)
 list. If something you depend on is in it, better to know now.
 
-And read the [status section of the README](../README.md#status). No adapter has
-yet been exercised against a live provider API. That is the honest state of the
-project and it should factor into your decision.
+And read the [status section of the README](../README.md#status). Every adapter
+has been exercised against its live provider API as of 2026-08-05, so the wire
+mapping is confirmed rather than merely self-consistent. The project is still
+pre-v1 and the Go API may change before `v1.0.0` — that is the part that should
+factor into your decision now.

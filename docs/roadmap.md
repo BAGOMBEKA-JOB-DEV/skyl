@@ -81,6 +81,11 @@ key. The replay half is tested; the record half is not. Until somebody runs
 `SKYL_RECORD=1` with a real credential, no adapter has still ever spoken to a real
 provider, and the caveat in the README stands unchanged.
 
+> **Closed 2026-08-05.** The integration suite was run against the live OpenAI,
+> Anthropic and Gemini endpoints and passes, so the README caveat above no
+> longer stands — see [validating.md](validating.md). The cassette half is
+> still open: no recording exists, so nothing replays that proof for free.
+
 ## Phase 1 — original scope
 
 The README says it plainly: every fake in the test suite was written from the same
@@ -253,6 +258,45 @@ does not exist.
   vendors retain, or that `Response.Raw` holds full payloads in memory.
 - A gateway runbook and container image. The documentation currently stops at `go run`.
 - A threat model, published benchmarks, migration guides, and a security response window.
+
+## Phase 5 — Validate, then exist ✅
+
+Four phases bought credibility. None of them made skyl installable: three of the four
+modules required the root at `v0.1.0`, a version that had never been tagged, and no
+adapter had ever spoken to a real provider. This phase closed both.
+
+- **A silent defect in streaming observability.** `observedStream` emitted its terminal
+  hook event only from `Close`, so a caller draining a stream with a plain
+  `for s.Next() {}` — the shape most callers write, and one the [`Stream`](../stream.go)
+  contract permits — got no event and lost the usage record entirely. Now it fires on
+  whichever of the terminal event or `Close` comes first, and latches.
+- **The live suite was widened** from four checks to eight, adding the paths a
+  documentation-derived fake structurally cannot validate: tool calling, the multi-turn
+  tool round trip, streamed tool-argument reassembly, and max-tokens truncation with the
+  cache-token inclusion rule.
+- **The sandbox learned `max_tokens`.** It had ignored the field entirely, so nothing
+  anywhere tested truncation end to end — and a truncated answer reported as complete is
+  silent data loss. It now truncates and reports the right finish reason on all three
+  wire protocols, under both OpenAI spellings of the field.
+- **`provider/anthropic` stopped being exempt from the stream contract.** `SkipStream`
+  excluded the adapter with the largest dependency surface from three checks, including
+  its only goroutine-leak assertion. A `StreamRawSSE` escape hatch lets it supply the
+  vendor's own named-event framing instead, and all eleven checks now run against it.
+- **Live validation ran, and passed** (2026-08-05) against OpenAI, Anthropic and Gemini.
+  That is the gate every earlier phase deferred to.
+- **A release-breaking bug in `scripts/release.sh`**, found by rehearsing the release
+  rather than by reading it. `gateway` requires three repository modules; the script
+  retargeted two. `otel` was added in Phase 3, after the script was written, and nothing
+  connected the two facts. It would have published a `gateway/v0.1.0` that nobody could
+  install, permanently — proxy tags are immutable. The script now retargets all three and
+  refuses to continue if a `replace` or a `v0.0.0` survives.
+- **The `releasable` CI gate checked the wrong modules.** It asserted all three
+  submodules were clean on *every* tag, including the root tag — where they legitimately
+  are not yet, because the root must be tagged before they can be rewritten. It now
+  checks only the module the tag actually publishes.
+
+**Remaining:** cut the tags. And record cassettes — the live run proved the adapters on
+the day it ran, but nothing replays that proof, so the next regression is invisible again.
 
 ## Deferred, deliberately
 

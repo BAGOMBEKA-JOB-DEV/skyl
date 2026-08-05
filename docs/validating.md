@@ -136,10 +136,13 @@ fastest way to see what actually arrived.
 ## After a green run
 
 1. Commit any cassettes recorded, having read them.
-2. Update the status section of [README.md](../README.md) — which currently says
-   no adapter has spoken to a real provider — naming which adapters and which
-   models were validated, and when.
-3. Then, and only then, cut the release tags. See [RELEASING.md](../RELEASING.md).
+2. **Update the date** in the status section of [README.md](../README.md), and
+   in [architecture.md](architecture.md) and [project-plan.md](project-plan.md),
+   which all carry it. A validation date that silently ages is worse than none:
+   it reads as a standing guarantee when it is a snapshot.
+3. If a provider you validated is not in that list, add it. If one in the list
+   was *not* covered by this run, say so rather than letting the date imply it.
+4. Then, and only then, cut the release tags. See [RELEASING.md](../RELEASING.md).
 
 If it did not go green, that is the run doing its job. Fix what it found and go
 again — the finding was always there, it was just invisible.

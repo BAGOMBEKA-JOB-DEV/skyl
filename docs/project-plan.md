@@ -68,23 +68,27 @@ The provider-agnostic types and the client that drives them.
 
 - [x] Build-tagged `integration` suite covering live calls, streaming, model
       discovery, and error classification for every adapter
-- [ ] **Actually run it against real provider APIs.** The harness exists and
-      compiles in CI, but no adapter has yet been exercised against a real
-      endpoint — that needs credentials. Until someone runs
-      `go test -tags=integration ./...` with real keys and it passes, the
-      adapters remain unvalidated against production APIs. This is the gate on
-      calling skyl production-ready.
+- [x] **Actually run it against real provider APIs.** Done 2026-08-05: the
+      suite passes against the live OpenAI, Anthropic and Gemini endpoints,
+      covering completions, streaming, tool calls, the multi-turn tool round
+      trip, truncation and error classification. This was the gate on calling
+      skyl production-ready, and it is closed.
+- [ ] **Record cassettes from a live run.** The validation above proved the
+      adapters on the day it ran; nothing replays that proof. One
+      `SKYL_RECORD=1` pass turns it into a permanent, credential-free
+      regression guard — see [validating.md](validating.md).
 - [ ] `provider/cohere` — needs its own adapter, non-OpenAI wire format
 - [ ] AWS Bedrock, Azure OpenAI, Vertex AI adapters
 - [ ] Generated model registry with context window / pricing / modality
 - [ ] Prompt caching surfaced uniformly where providers support it
-- [ ] Benchmarks and allocation budgets on hot paths
-- [ ] Fuzz tests on the SSE reader
+- [x] Benchmarks and allocation budgets on hot paths — see
+      [benchmarks.md](benchmarks.md)
+- [x] Fuzz tests on the SSE reader — `FuzzReader`, run weekly in CI
 
 ### M7 — v1.0.0
 
 - [ ] API frozen and reviewed
-- [ ] Every adapter validated against live APIs
+- [x] Every adapter validated against live APIs (2026-08-05)
 - [ ] Documentation complete, all examples compiling
 - [ ] Semantic-versioning commitment published
 
