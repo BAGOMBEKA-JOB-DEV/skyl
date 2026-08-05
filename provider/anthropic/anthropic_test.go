@@ -30,9 +30,42 @@ const successBody = `{
 
 const errorBody = `{"type": "error", "error": {"type": "invalid_request_error", "message": "something went wrong"}}`
 
-// TestContract runs the shared adapter contract. Streaming is covered
-// separately below, because Anthropic's SSE stream is a sequence of named
-// events rather than the bare `data:` frames the shared suite emits.
+// contractStreamSSE is an Anthropic stream whose text deltas concatenate to
+// "ab", which is what the shared contract asserts.
+//
+// It is spelled out here rather than assembled from StreamFrames because
+// Anthropic's stream is a sequence of *named* events: the `event:` line is
+// load-bearing, and a bare `data:` frame is not a valid Anthropic stream.
+const contractStreamSSE = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_c","type":"message","role":"assistant","model":"served-model-0613","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"b"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+// TestContract runs the shared adapter contract, streaming included.
+//
+// Streaming used to be skipped here because Anthropic's SSE is named events
+// rather than the bare `data:` frames the suite emits. That exempted this
+// adapter — the one with by far the largest dependency surface — from three
+// checks, including the only goroutine-leak assertion it had. Supplying the
+// vendor's own framing via StreamRawSSE costs a fixture and buys all three.
 func TestContract(t *testing.T) {
 	t.Parallel()
 
@@ -42,11 +75,11 @@ func TestContract(t *testing.T) {
 		New: func(baseURL string) skyl.Provider {
 			return anthropic.New(testKey, anthropic.WithBaseURL(baseURL))
 		},
-		SuccessBody: successBody,
-		WantText:    "hi there",
-		WantModel:   "served-model-0613",
-		ErrorBody:   errorBody,
-		SkipStream:  true,
+		SuccessBody:  successBody,
+		WantText:     "hi there",
+		WantModel:    "served-model-0613",
+		ErrorBody:    errorBody,
+		StreamRawSSE: contractStreamSSE,
 	}.Run(t)
 }
 

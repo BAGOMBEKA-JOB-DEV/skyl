@@ -378,7 +378,7 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 
 		c.emit(ctx, HookEvent{
 			Provider:  c.provider.Name(),
-			Operation: "models",
+			Operation: OpModels,
 			Attempt:   attempt,
 			Duration:  time.Since(start),
 			Err:       err,

@@ -116,7 +116,7 @@ go vet ./...
 go test -race ./...
 ```
 
-CI runs the same commands on all three modules, plus `golangci-lint`, a
+CI runs the same commands on all four modules, plus `golangci-lint`, a
 `go mod tidy` check, and a per-module coverage floor. A red build will not be
 merged.
 

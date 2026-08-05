@@ -77,6 +77,18 @@ func (r oaiRequest) toolNames() []string {
 	return names
 }
 
+// maxTokens reports the output cap under whichever spelling arrived.
+//
+// provider/openai sends max_completion_tokens and provider/openaicompat sends
+// max_tokens, so reading either field alone honours the cap for one adapter and
+// silently ignores it for the other.
+func (r oaiRequest) maxTokens() int {
+	if r.MaxCompletionTokens > 0 {
+		return r.MaxCompletionTokens
+	}
+	return r.MaxTokens
+}
+
 // toolChoice normalises tool_choice onto the shared vocabulary.
 func (r oaiRequest) toolChoice() (mode, forced string) {
 	switch v := r.ToolChoice.(type) {
@@ -184,16 +196,26 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 		call = decideToolCall(prompt, req.toolNames(), mode, forced)
 	}
 
+	// max_tokens only bounds prose. A tool call is emitted whole or not at all,
+	// which is what the real APIs do.
+	var truncated bool
+	if call == nil {
+		answer, truncated = truncate(answer, req.maxTokens())
+	}
+
 	inTokens := countTokens(prompt)
 	outTokens := countTokens(answer)
 
 	if req.Stream {
-		h.oaiStream(w, req.Model, answer, call, fault, inTokens, outTokens)
+		h.oaiStream(w, req.Model, answer, call, fault, inTokens, outTokens, truncated)
 		return
 	}
 
 	message := map[string]any{"role": "assistant", "content": answer}
 	finish := "stop"
+	if truncated {
+		finish = "length"
+	}
 	if call != nil {
 		// A turn that calls a tool carries no prose, and content is explicitly
 		// null rather than absent — an adapter that reads it as a string gets a
@@ -229,7 +251,7 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) oaiStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int) {
+func (h *Handler) oaiStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int, truncated bool) {
 	flush := beginSSE(w)
 
 	send := func(payload any) {
@@ -292,7 +314,11 @@ func (h *Handler) oaiStream(w http.ResponseWriter, model, answer string, call *t
 		for _, piece := range chunk(answer) {
 			send(base(map[string]any{"content": piece}, nil))
 		}
-		send(base(map[string]any{}, "stop"))
+		if truncated {
+			send(base(map[string]any{}, "length"))
+		} else {
+			send(base(map[string]any{}, "stop"))
+		}
 	}
 
 	// A final chunk carrying usage and no choices, which is what

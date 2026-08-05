@@ -1,5 +1,9 @@
 # skyl
 
+[![CI](https://github.com/BAGOMBEKA-JOB-DEV/skyl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BAGOMBEKA-JOB-DEV/skyl/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/BAGOMBEKA-JOB-DEV/skyl.svg)](https://pkg.go.dev/github.com/BAGOMBEKA-JOB-DEV/skyl)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 **One Go interface for every AI model.**
 
 skyl is a small, dependency-light Go library that lets you talk to Claude, GPT,
@@ -134,16 +138,25 @@ Importing the core library never pulls in chi. See
 
 ## Status
 
-**Pre-v1, and not yet validated against live provider APIs.** Everything here
-is implemented, unit-tested, contract-tested, exercised end to end over real
-sockets, and CI-green — but every fake in the test suite was written from the
-same provider documentation as the adapter it tests. If a field name is wrong,
-the fake is wrong in the same way and both stay green. No adapter has yet made
-a call to a real provider. Treat it as ready to evaluate, not ready to depend
-on in production.
+**Pre-v1, and validated against live provider APIs.** Everything here is
+implemented, unit-tested, contract-tested, exercised end to end over real
+sockets, and CI-green — and as of **2026-08-05** the integration suite has been
+run against the real OpenAI, Anthropic and Gemini endpoints and passes.
 
-There are three suites, and the gap between the second and third is the whole
-story:
+That last part is the one that took longest to be able to write. Every fake in
+this test suite was written from the same provider documentation as the adapter
+it tests, so a wrong field name is wrong identically in both and CI stays green
+regardless. Only a real call settles it, and one has now been made against each
+adapter: completions, streaming, tool calls, the multi-turn tool round trip,
+truncation, and error classification.
+
+**Pre-v1 still means what it says.** The wire mapping is confirmed; the Go API
+is not frozen and may change before `v1.0.0` (`docs/rules.md` §1.2). Live
+validation is a snapshot, not a subscription — providers change, and
+[docs/validating.md](docs/validating.md) is how you re-run it yourself against
+your own account and models.
+
+There are three suites, and the third is the one CI cannot run for you:
 
 ```bash
 go test ./...                  # mapping logic, in process
@@ -151,14 +164,18 @@ go test -tags=sandbox ./...    # the full stack over real sockets — no keys ne
 go test -tags=integration ./...# real providers — needs your keys, costs money
 ```
 
-CI runs the first two on every change. Only the third can confirm the field
-names are right, and it needs your own credentials:
+CI runs the first two on every change. The third needs credentials, so it runs
+by hand — reproduce it with your own:
 
 ```bash
 export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=...
 go test -tags=integration ./provider/
 cd provider/anthropic && go test -tags=integration ./...
 ```
+
+Eight checks per provider, about nine upstream requests, pennies on a small
+model. [docs/validating.md](docs/validating.md) covers what each one proves and
+how to tell an adapter bug from a model being unhelpful.
 
 To develop against skyl before you have any key, run the local sandbox — it
 speaks all four providers' wire protocols and costs nothing. See

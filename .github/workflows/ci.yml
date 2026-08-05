@@ -203,31 +203,64 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Check only the module THIS tag publishes.
+      #
+      # Checking all three on every tag would fail the root tag, and fail it
+      # legitimately: RELEASING.md requires the root to go first, and
+      # scripts/release.sh only rewrites the submodules afterwards — a
+      # submodule's go.sum cannot be computed until the version it depends on
+      # is resolvable on the proxy. So at root-tag time the submodules still
+      # carry their replace and their v0.0.0 require, exactly as intended.
+      #
+      # A gate that fails on the one tag where nothing is wrong teaches people
+      # to ignore it.
+      - name: identify the module under release
+        id: mod
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          case "$ref" in
+            provider/anthropic/v*) dir=provider/anthropic ;;
+            gateway/v*)            dir=gateway ;;
+            otel/v*)               dir=otel ;;
+            v*)                    dir=. ;;
+            *)
+              echo "::error::$ref is not a recognised release tag"
+              exit 1
+              ;;
+          esac
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "tag $ref publishes $dir"
+
       - name: no replace directives
         run: |
-          found=0
-          for mod in provider/anthropic gateway otel; do
-            if grep -qE '^\s*replace\s' "$mod/go.mod"; then
-              echo "::error file=$mod/go.mod::$mod/go.mod contains a replace directive"
-              grep -nE '^\s*replace\s' "$mod/go.mod"
-              found=1
-            fi
-          done
-          if [ "$found" -eq 1 ]; then
-            echo "Use the go.work workspace for local development instead; see RELEASING.md."
+          dir='${{ steps.mod.outputs.dir }}'
+          if [ "$dir" = "." ]; then
+            echo "the root module has no intra-repo dependencies — nothing to check"
+            exit 0
+          fi
+          if grep -qE '^\s*replace\s' "$dir/go.mod"; then
+            echo "::error file=$dir/go.mod::$dir/go.mod contains a replace directive"
+            grep -nE '^\s*replace\s' "$dir/go.mod"
+            echo "A replace is ignored by consumers, so publishing one means the require"
+            echo "line is the only thing that resolves. Use go.work locally; see RELEASING.md."
             exit 1
           fi
-          echo "no replace directives — modules are publishable"
+          echo "no replace directives — $dir is publishable"
 
       # A require on a version that was never tagged fails the same way, and is
       # what actually breaks the install: the replace above merely hides it.
       - name: no placeholder versions
         run: |
-          if grep -rnE 'BAGOMBEKA-JOB-DEV/skyl[^ ]* v0\.0\.0' provider/anthropic/go.mod gateway/go.mod otel/go.mod; then
-            echo "::error::a module requires the root at v0.0.0, which will never exist on the proxy"
+          dir='${{ steps.mod.outputs.dir }}'
+          if [ "$dir" = "." ]; then
+            echo "the root module requires nothing from this repository"
+            exit 0
+          fi
+          if grep -nE 'BAGOMBEKA-JOB-DEV/skyl[^ ]* v0\.0\.0' "$dir/go.mod"; then
+            echo "::error file=$dir/go.mod::$dir requires a repository module at v0.0.0, which will never exist on the proxy"
             exit 1
           fi
-          echo "no placeholder versions"
+          echo "no placeholder versions — $dir is publishable"
 
   # govulncheck reports vulnerabilities that are actually *reachable* from this
   # code, not merely present in the dependency graph, which is what makes it
@@ -248,8 +281,13 @@ jobs:
 
       - name: govulncheck
         working-directory: ${{ matrix.module }}
+        # Pinned rather than @latest: this tool decides whether the build fails,
+        # so an upstream release changing its behaviour should be a deliberate
+        # bump here, not a surprise on an unrelated pull request. The
+        # vulnerability *database* is still fetched live, which is the part that
+        # genuinely needs to be current.
         run: |
-          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   lint:
     name: golangci-lint (${{ matrix.module }})

@@ -8,11 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Until v1.0.0, breaking changes may land in minor releases. They will always be
 listed here with a migration note.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-08-05
 
 The first release. Everything below is the initial build of skyl: the repository
 previously held an unrelated Go to-do application, which remains archived on the
 `master` branch.
+
+Every adapter has been exercised against its live provider API — OpenAI,
+Anthropic and Gemini — covering completions, streaming, tool calls, the
+multi-turn tool round trip, truncation and error classification. That is what
+makes this a release rather than a preview: until it happened, every test in
+the suite agreed with the adapter it tested because both were written from the
+same documentation.
+
+The Go API is **not** frozen. Until `v1.0.0`, breaking changes may land in a
+minor release, each with a migration note here.
 
 Release mechanics live in [RELEASING.md](RELEASING.md). The order is not
 optional, and tags on the module proxy are immutable.
@@ -203,8 +213,8 @@ what the code needs fails the build rather than reaching a user.
   and a test walks every committed fixture looking for credential-shaped
   strings. Replay tests are untagged, so they begin asserting in ordinary CI as
   soon as a recording lands.
-- **`Example` functions** (rules.md §8.3, previously zero) — ten runnable, with
-  verified output.
+- **`Example` functions** (rules.md §8.3, previously zero) — twelve runnable,
+  with verified output.
 - **Benchmarks** on the per-token paths: SSE frame parsing, per-chunk JSON
   decode, tool-argument accumulation, and payload construction.
 - `docs/roadmap.md` — what stands between this and production use, from an
@@ -286,4 +296,4 @@ release, so neither ever shipped.
   not pull in a router.
   ([ADR-0003](docs/adr/0003-gateway-as-separate-module.md))
 
-[0.1.0]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/commits/main
+[0.1.0]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/releases/tag/v0.1.0

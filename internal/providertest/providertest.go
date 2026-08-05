@@ -61,8 +61,20 @@ type Suite struct {
 	// deltas concatenate to "ab".
 	StreamFrames []string
 
+	// StreamRawSSE is the complete SSE body, written verbatim, for an adapter
+	// whose framing is not bare `data:` frames — Anthropic's stream is a
+	// sequence of *named* events, so StreamFrames cannot express it.
+	//
+	// When set it replaces StreamFrames. Its text deltas must still
+	// concatenate to "ab", so the same assertions hold for every adapter.
+	StreamRawSSE string
+
 	// SkipStream turns off the streaming assertions, for an adapter that does
 	// not support streaming.
+	//
+	// It is not for an adapter whose *framing* is merely unusual: use
+	// StreamRawSSE for that. Skipping costs three checks, and one of them —
+	// the goroutine-leak check — has no equivalent anywhere else.
 	SkipStream bool
 }
 
@@ -117,11 +129,19 @@ func (s Suite) serveSSE(t *testing.T) skyl.Provider {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		for _, frame := range s.StreamFrames {
-			_, _ = w.Write([]byte("data: " + frame + "\n\n"))
+		flush := func() {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+		}
+		if s.StreamRawSSE != "" {
+			_, _ = w.Write([]byte(s.StreamRawSSE))
+			flush()
+			return
+		}
+		for _, frame := range s.StreamFrames {
+			_, _ = w.Write([]byte("data: " + frame + "\n\n"))
+			flush()
 		}
 	}))
 	t.Cleanup(srv.Close)

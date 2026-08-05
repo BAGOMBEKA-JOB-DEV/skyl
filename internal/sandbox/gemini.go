@@ -62,6 +62,21 @@ type geminiRequest struct {
 			AllowedFunctionNames []string `json:"allowedFunctionNames"`
 		} `json:"functionCallingConfig"`
 	} `json:"toolConfig"`
+
+	// Gemini nests sampling parameters under generationConfig rather than
+	// putting them at the top level, which is the shape ProviderOptions has to
+	// merge into.
+	GenerationConfig *struct {
+		MaxOutputTokens int `json:"maxOutputTokens"`
+	} `json:"generationConfig"`
+}
+
+// maxTokens reports the request's output cap, or 0 when it set none.
+func (r geminiRequest) maxTokens() int {
+	if r.GenerationConfig == nil {
+		return 0
+	}
+	return r.GenerationConfig.MaxOutputTokens
 }
 
 func (r geminiRequest) toolNames() []string {
@@ -188,11 +203,17 @@ func (h *Handler) geminiGenerate(w http.ResponseWriter, r *http.Request) {
 		call = decideToolCall(prompt, req.toolNames(), mode, forced)
 	}
 
+	// maxOutputTokens bounds prose only; a functionCall is emitted whole.
+	var truncated bool
+	if call == nil {
+		answer, truncated = truncate(answer, req.maxTokens())
+	}
+
 	inTokens := countTokens(prompt)
 	outTokens := countTokens(answer)
 
 	if method == "streamGenerateContent" {
-		h.geminiStream(w, model, answer, call, fault, inTokens, outTokens)
+		h.geminiStream(w, model, answer, call, fault, inTokens, outTokens, truncated)
 		return
 	}
 
@@ -208,7 +229,11 @@ func (h *Handler) geminiGenerate(w http.ResponseWriter, r *http.Request) {
 		outTokens = countTokens(call.Args)
 	}
 
-	writeJSON(w, http.StatusOK, geminiPayload(model, parts, "STOP", inTokens, outTokens))
+	finish := "STOP"
+	if truncated {
+		finish = "MAX_TOKENS"
+	}
+	writeJSON(w, http.StatusOK, geminiPayload(model, parts, finish, inTokens, outTokens))
 }
 
 // geminiPayload builds a response around whatever parts the turn produced.
@@ -241,7 +266,7 @@ func geminiPayload(model string, parts []any, finish string, in, out int) map[st
 
 // geminiStream emits alt=sse frames: bare `data:` records, no event names, and
 // no [DONE] sentinel — the stream simply ends.
-func (h *Handler) geminiStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int) {
+func (h *Handler) geminiStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int, truncated bool) {
 	flush := beginSSE(w)
 
 	send := func(payload map[string]any) {
@@ -297,7 +322,11 @@ func (h *Handler) geminiStream(w http.ResponseWriter, model, answer string, call
 		// pass against a fake that repeated them everywhere.
 		payload := geminiPayload(model, text(piece), "", 0, 0)
 		if i == len(pieces)-1 {
-			payload = geminiPayload(model, text(piece), "STOP", in, out)
+			finish := "STOP"
+			if truncated {
+				finish = "MAX_TOKENS"
+			}
+			payload = geminiPayload(model, text(piece), finish, in, out)
 		} else {
 			delete(payload, "usageMetadata")
 		}
