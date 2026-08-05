@@ -299,6 +299,53 @@ func ExampleRequest_providerOptions() {
 	// sent with top_k
 }
 
+// A schema constrains the reply to JSON you can unmarshal directly.
+//
+// The document arrives in the ordinary text channel, so Text() is the JSON and
+// the caller decodes it. skyl does not validate the reply against the schema it
+// sent — see ADR-0008 — so a type mismatch is your json.Unmarshal error, which
+// is where you want it.
+func ExampleRequest_responseFormat() {
+	req := &skyl.Request{
+		Model:     "example-model",
+		MaxTokens: 256,
+		Messages:  []skyl.Message{skyl.UserText("Who wrote the Go blog post on errors?")},
+		ResponseFormat: &skyl.ResponseFormat{
+			Name: "author",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+					"year": map[string]any{"type": "integer"},
+				},
+				// OpenAI's strict mode requires every property to be listed
+				// here and additionalProperties to be false. Gemini accepts an
+				// OpenAPI subset instead — test a schema on the providers you
+				// actually use, because skyl does not translate between them.
+				"required":             []string{"name", "year"},
+				"additionalProperties": false,
+			},
+		},
+	}
+
+	resp, err := skyl.New(fakeProvider{text: `{"name":"Rob Pike","year":2015}`}).
+		Complete(context.Background(), req)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var author struct {
+		Name string `json:"name"`
+		Year int    `json:"year"`
+	}
+	if err := json.Unmarshal([]byte(resp.Text()), &author); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s, %d\n", author.Name, author.Year)
+	// Output:
+	// Rob Pike, 2015
+}
+
 // Validation happens locally, so a malformed request fails without costing a
 // round trip.
 func ExampleRequest_Validate() {

@@ -289,6 +289,78 @@ func TestToolChoiceAndThinkingReachSkyl(t *testing.T) {
 	}
 }
 
+func TestResponseFormatReachesSkyl(t *testing.T) {
+	t.Parallel()
+
+	p := okProvider()
+	srv := newTestServer(t, p)
+
+	body := `{"model":"m","messages":[{"role":"user","text":"hi"}],
+		"response_format":{"name":"person","schema":{"type":"object",
+			"properties":{"name":{"type":"string"}},"required":["name"]}}}`
+
+	if rec := do(t, srv, http.MethodPost, "/v1/chat", body, testToken); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body)
+	}
+
+	rf := p.lastReq.ResponseFormat
+	if rf == nil {
+		t.Fatal("ResponseFormat is nil; the wire field never reached skyl")
+	}
+	if rf.Name != "person" {
+		t.Errorf("Name = %q, want person", rf.Name)
+	}
+	// Verbatim, per ADR-0008 — the gateway translates no dialects either.
+	if rf.Schema["type"] != "object" {
+		t.Errorf("schema was altered in transit: %#v", rf.Schema)
+	}
+	props, ok := rf.Schema["properties"].(map[string]any)
+	if !ok || props["name"] == nil {
+		t.Errorf("schema properties were lost: %#v", rf.Schema)
+	}
+}
+
+// The gateway decodes with DisallowUnknownFields, so a field it does not model
+// is a 400 rather than a silent drop. That is the right behaviour and it is
+// also why this field had to be added here in the same change as the library.
+func TestResponseFormatWithoutASchemaIsRejected(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(t, okProvider())
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "no schema key",
+			body: `{"model":"m","messages":[{"role":"user","text":"hi"}],
+				"response_format":{"name":"person"}}`,
+		},
+		{
+			name: "empty schema object",
+			body: `{"model":"m","messages":[{"role":"user","text":"hi"}],
+				"response_format":{"schema":{}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := do(t, srv, http.MethodPost, "/v1/chat", tt.body, testToken)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
+			}
+			// The message must name the wire field, not skyl's Go field: an
+			// operator reading this only ever saw the JSON they sent.
+			if !strings.Contains(rec.Body.String(), "response_format") {
+				t.Errorf("error does not name the offending field: %s", rec.Body)
+			}
+		})
+	}
+}
+
 func TestMalformedPartsAreRejectedWithAUsefulMessage(t *testing.T) {
 	t.Parallel()
 

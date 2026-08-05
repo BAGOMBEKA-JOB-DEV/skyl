@@ -171,6 +171,59 @@ for _, call := range resp.ToolCalls() {
 final, _ := client.Complete(ctx, req) // loop until no tool calls remain
 ```
 
+## Structured output
+
+Ask for JSON matching a schema, and unmarshal it directly:
+
+```go
+resp, err := client.Complete(ctx, &skyl.Request{
+	Model:     "claude-sonnet-5",
+	MaxTokens: 256,
+	Messages:  []skyl.Message{skyl.UserText("Who wrote The Go Programming Language?")},
+	ResponseFormat: &skyl.ResponseFormat{
+		Name: "book",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"authors": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "string"},
+				},
+				"year": map[string]any{"type": "integer"},
+			},
+			"required":             []string{"authors", "year"},
+			"additionalProperties": false,
+		},
+	},
+})
+if err != nil {
+	return err
+}
+
+var book struct {
+	Authors []string `json:"authors"`
+	Year    int      `json:"year"`
+}
+if err := json.Unmarshal([]byte(resp.Text()), &book); err != nil {
+	return err
+}
+```
+
+Three things to know before you rely on it:
+
+- **The schema is sent verbatim, and the dialects differ.** OpenAI runs in
+  strict mode, which requires every property in `required` and
+  `"additionalProperties": false`. Gemini takes an OpenAPI 3.0 subset rather
+  than JSON Schema. skyl does not translate between them
+  ([ADR-0008](adr/0008-structured-output.md)), so test a schema against the
+  providers you actually use — the [feature matrix](feature-matrix.md#responseformat)
+  has the details.
+- **The reply is ordinary assistant text.** `Text()` returns the JSON document;
+  nothing on `Response` marks it as structured, and skyl does not validate the
+  reply against the schema it sent. Your `json.Unmarshal` error is the check.
+- **When streaming, only the concatenation is JSON.** The document arrives as
+  text deltas like any other reply, so do not unmarshal an individual event.
+
 ## Errors
 
 Branch on classification, never on message text:

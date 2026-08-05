@@ -42,12 +42,35 @@ smaller than you would expect.
 | `Stop` | ✅ `stop_sequences` | ✅ `stop` | ✅ `generationConfig.stopSequences` |
 | `Tools` | ✅ — schema rebuilt, see [below](#tool-schemas) | ✅ `parameters` verbatim | ✅ `functionDeclarations`, verbatim |
 | `ToolChoice` | ✅ all four modes | ✅ all four modes | ✅ all four modes |
-| `Thinking` | ⚠️ partly — see [below](#thinking) | ⚠️ mostly — see below | ✅ fully |
+| `Thinking` | ✅ — see [below](#thinking) | ⚠️ mostly — see below | ✅ fully |
+| `ResponseFormat` | ✅ `output_config.format` | ✅ `response_format.json_schema`, `strict: true` | ✅ `generationConfig.responseSchema` + `responseMimeType` |
 | `ProviderOptions` | ✅ JSON-path set | ✅ shallow merge | ✅ shallow merge |
 
 Anthropic is the only adapter that substitutes a `MaxTokens` default: its API
 requires the field, so skyl supplies 4096 rather than failing a request every
 other provider would accept.
+
+### ResponseFormat
+
+All four adapters send the schema, and all four send it **verbatim** — skyl
+translates no dialects ([ADR-0008](adr/0008-structured-output.md)). That is the
+feature's sharp edge rather than a gap in it: the same schema is not portable.
+
+| | Requires |
+|---|---|
+| openai / openaicompat | Strict mode. Every property listed in `required`, and `"additionalProperties": false`. A schema without them is OpenAI's own 400. |
+| gemini | An **OpenAPI 3.0 subset**, not JSON Schema. No `$ref`, narrower keyword set. |
+| anthropic | JSON Schema, and the most permissive of the three. |
+
+`ResponseFormat.Name` reaches only OpenAI, which requires one — skyl supplies
+`"response"` when you leave it empty. Anthropic and Gemini have no field for it
+and it is dropped; that is stated here and in the field's doc comment rather
+than listed as a silent loss, because there is nowhere for it to go.
+
+The reply comes back in the ordinary text channel on every provider, so
+`Response.Text()` is the JSON document and nothing on `Response` marks it as
+structured. When streaming, it arrives as ordinary text deltas — only the
+concatenation is valid JSON, so do not unmarshal an individual event.
 
 ### Tool schemas
 
@@ -71,17 +94,21 @@ The least uniform field in the library. Read the row for the provider you use.
 | `nil` | nothing sent | nothing sent | nothing sent |
 | `{Enabled: true}`, no effort | ✅ `thinking: {type: adaptive}` | ⚠️ **ignored** | ✅ budget `-1` (model decides) |
 | `{Enabled: false}` | ✅ `thinking: {type: disabled}` | ⚠️ **ignored** | ✅ budget `0` |
-| `{Enabled: true, Effort: low}` | ⚠️ effort **ignored**, adaptive sent | ✅ `reasoning_effort: low` | ✅ budget 1024 |
-| `… medium` | ⚠️ effort ignored | ✅ `medium` | ✅ 8192 |
-| `… high` | ⚠️ effort ignored | ✅ `high` | ✅ 16384 |
-| `… max` | ⚠️ effort ignored | ✅ sent as `max` — **OpenAI does not define this value**, so expect a 400 | ✅ 24576 |
+| `{Enabled: true, Effort: low}` | ✅ adaptive + `output_config.effort: low` | ✅ `reasoning_effort: low` | ✅ budget 1024 |
+| `… medium` | ✅ `output_config.effort: medium` | ✅ `medium` | ✅ 8192 |
+| `… high` | ✅ `output_config.effort: high` | ✅ `high` | ✅ 16384 |
+| `… max` | ✅ `output_config.effort: max` | ✅ sent as `max` — **OpenAI does not define this value**, so expect a 400 | ✅ 24576 |
 
-Two consequences worth stating plainly:
+One consequence worth stating plainly:
 
 - **On OpenAI, `&skyl.Thinking{Enabled: false}` does nothing.** If you are
   trying to turn reasoning off to control cost, it will not work there.
-- **On Anthropic, `Effort` does nothing.** The SDK's adaptive thinking config
-  has no budget or effort field, so there is nothing to map it onto.
+
+Anthropic carries `Effort` on `output_config`, beside the response schema —
+*not* on the thinking block, which is why skyl dropped it until 0.2.0 and this
+document listed it as silently ignored. An effort value skyl has no constant
+for is passed through rather than rejected, so a level Anthropic adds later
+works without a skyl release.
 
 ---
 
@@ -243,6 +270,7 @@ They share one implementation. The complete list of differences:
 | Base URL | defaults to OpenAI | **required**; `New` panics without it |
 | API key | positional argument | optional — omit it for Ollama, LM Studio, llama.cpp |
 | Extra headers | `WithOrganization`, `WithProject` | generic `WithHeader` |
+| `ResponseFormat` support | guaranteed by OpenAI | **host-dependent** — many compatible hosts implement only `{"type": "json_object"}` and reject `json_schema` outright, and some accept it and ignore the schema |
 
 Everything else — request mapping, response parsing, streaming, error
 classification — is byte-identical.
@@ -256,26 +284,25 @@ and does not do it, which is the failure mode that costs you an afternoon.
 
 **Per adapter**
 
-1. `Thinking.Effort` — anthropic.
-2. `Thinking` entirely, unless `Enabled` **and** `Effort` are both set — openai,
+1. `Thinking` entirely, unless `Enabled` **and** `Effort` are both set — openai,
    openaicompat. So an explicit "off" does nothing.
-3. `ToolResult.IsError` — gemini always; openai/openaicompat when content is
+2. `ToolResult.IsError` — gemini always; openai/openaicompat when content is
    empty.
-4. A tool schema's top-level `type`, coerced to `object` — anthropic.
-5. Non-string entries in a tool's `required` array — anthropic.
-6. `Image.URL` when `Data` is also set — anthropic, gemini. `Image.Data` when
+3. A tool schema's top-level `type`, coerced to `object` — anthropic.
+4. Non-string entries in a tool's `required` array — anthropic.
+5. `Image.URL` when `Data` is also set — anthropic, gemini. `Image.Data` when
    `URL` is also set — openai, openaicompat.
-7. `nextPageToken` on model listing beyond 1000 entries — gemini.
-8. Streaming tool calls whose `name` never arrived — openai, openaicompat.
-9. Non-`text` blocks in a response content array — openai, openaicompat.
+6. `nextPageToken` on model listing beyond 1000 entries — gemini.
+7. Streaming tool calls whose `name` never arrived — openai, openaicompat.
+8. Non-`text` blocks in a response content array — openai, openaicompat.
 
 **All adapters**
 
-10. Reasoning/thinking content in non-streaming responses.
-11. Reasoning-token counts.
-12. `StreamEvent.Raw` on the terminal `EventDone`.
-13. `Usage.CacheWriteTokens` — anthropic is the only source.
-14. Sibling keys of any object a `ProviderOptions` top-level key replaces —
+9. Reasoning/thinking content in non-streaming responses.
+10. Reasoning-token counts.
+11. `StreamEvent.Raw` on the terminal `EventDone`.
+12. `Usage.CacheWriteTokens` — anthropic is the only source.
+13. Sibling keys of any object a `ProviderOptions` top-level key replaces —
     openai, openaicompat, gemini.
 
 **Deliberately not silent:** unparseable SSE frames are skipped rather than

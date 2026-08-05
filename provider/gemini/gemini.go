@@ -182,6 +182,16 @@ func (p *Provider) buildPayload(req *skyl.Request) (map[string]any, error) {
 		}
 		gen["thinkingConfig"] = tc
 	}
+	if rf := req.ResponseFormat; rf != nil {
+		// Gemini needs both: the mime type switches the model into JSON mode,
+		// and the schema constrains its shape. Sending the schema alone is
+		// accepted and then ignored, which is the worst of the two outcomes.
+		//
+		// ResponseFormat.Name has nowhere to go here; Gemini's schema is
+		// anonymous. The field's doc comment says the other providers ignore it.
+		gen["responseMimeType"] = "application/json"
+		gen["responseSchema"] = rf.Schema
+	}
 	if len(gen) > 0 {
 		payload["generationConfig"] = gen
 	}

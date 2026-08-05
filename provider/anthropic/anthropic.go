@@ -201,11 +201,25 @@ func buildParams(req *skyl.Request) (sdk.MessageNewParams, error) {
 			params.Thinking = sdk.ThinkingConfigParamUnion{
 				OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{},
 			}
+			// Effort lives on output_config, not on the thinking block — which
+			// is why it used to be dropped here and documented as silently
+			// ignored. It is passed through rather than switched over, so an
+			// effort level Anthropic adds later works without a skyl release
+			// and an unknown one comes back as Anthropic's own error.
+			if th.Effort != "" {
+				params.OutputConfig.Effort = sdk.OutputConfigEffort(th.Effort)
+			}
 		} else {
 			params.Thinking = sdk.ThinkingConfigParamUnion{
 				OfDisabled: &sdk.ThinkingConfigDisabledParam{},
 			}
 		}
+	}
+
+	if rf := req.ResponseFormat; rf != nil {
+		// Anthropic's schema is anonymous, so ResponseFormat.Name has nowhere
+		// to go; the field's doc comment says the other providers ignore it.
+		params.OutputConfig.Format = sdk.JSONOutputFormatParam{Schema: rf.Schema}
 	}
 
 	return params, nil

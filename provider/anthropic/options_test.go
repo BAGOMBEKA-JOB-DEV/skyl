@@ -245,6 +245,144 @@ func TestThinking(t *testing.T) {
 	}
 }
 
+// Effort was documented as silently ignored on this adapter, because the
+// thinking block has no such field. It lives on output_config instead, so the
+// gap was a lookup in the wrong place rather than a missing capability.
+func TestThinkingEffortMapsToOutputConfig(t *testing.T) {
+	t.Parallel()
+
+	outputConfig := func(t *testing.T, got map[string]any) map[string]any {
+		t.Helper()
+		oc, ok := got["output_config"].(map[string]any)
+		if !ok {
+			t.Fatalf("output_config = %v, want an object", got["output_config"])
+		}
+		return oc
+	}
+
+	for _, effort := range []skyl.Effort{
+		skyl.EffortLow, skyl.EffortMedium, skyl.EffortHigh, skyl.EffortMax,
+	} {
+		t.Run(string(effort), func(t *testing.T) {
+			t.Parallel()
+
+			req := basicRequest()
+			req.Thinking = &skyl.Thinking{Enabled: true, Effort: effort}
+
+			oc := outputConfig(t, captureRequest(t, req))
+			if oc["effort"] != string(effort) {
+				t.Errorf("output_config.effort = %v, want %q", oc["effort"], effort)
+			}
+		})
+	}
+
+	// Anthropic accepts an effort skyl has no constant for. Passing the value
+	// through means a level added later works without a skyl release.
+	t.Run("unknown effort is passed through", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.Thinking = &skyl.Thinking{Enabled: true, Effort: skyl.Effort("xhigh")}
+
+		oc := outputConfig(t, captureRequest(t, req))
+		if oc["effort"] != "xhigh" {
+			t.Errorf("output_config.effort = %v, want xhigh passed through", oc["effort"])
+		}
+	})
+
+	t.Run("no effort sends no output_config", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.Thinking = &skyl.Thinking{Enabled: true}
+
+		if _, ok := captureRequest(t, req)["output_config"]; ok {
+			t.Error("output_config was sent for a Thinking with no effort")
+		}
+	})
+
+	// Effort with reasoning switched off would be contradictory, and Anthropic
+	// has no thinking budget to spend.
+	t.Run("disabled thinking sends no effort", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.Thinking = &skyl.Thinking{Enabled: false, Effort: skyl.EffortHigh}
+
+		if _, ok := captureRequest(t, req)["output_config"]; ok {
+			t.Error("output_config was sent for disabled thinking")
+		}
+	})
+}
+
+func TestResponseFormatMapsToOutputConfig(t *testing.T) {
+	t.Parallel()
+
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"city": map[string]any{"type": "string"}},
+		"required":   []string{"city"},
+	}
+
+	t.Run("schema reaches output_config.format", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.ResponseFormat = &skyl.ResponseFormat{Name: "place", Schema: schema}
+
+		got := captureRequest(t, req)
+		oc, ok := got["output_config"].(map[string]any)
+		if !ok {
+			t.Fatalf("output_config = %v, want an object", got["output_config"])
+		}
+		format, ok := oc["format"].(map[string]any)
+		if !ok {
+			t.Fatalf("output_config.format = %v, want an object", oc["format"])
+		}
+		if format["type"] != "json_schema" {
+			t.Errorf("format.type = %v, want json_schema", format["type"])
+		}
+		// Verbatim: this adapter reconstructs *tool* schemas, and that costs it
+		// two entries on the silently-ignored list. ADR-0008 says not here.
+		sent, ok := format["schema"].(map[string]any)
+		if !ok {
+			t.Fatalf("format.schema = %v, want an object", format["schema"])
+		}
+		if sent["type"] != "object" {
+			t.Errorf("schema was altered in transit: %#v", sent)
+		}
+		props, ok := sent["properties"].(map[string]any)
+		if !ok || props["city"] == nil {
+			t.Errorf("schema properties were lost: %#v", sent)
+		}
+	})
+
+	t.Run("omitted when nil", func(t *testing.T) {
+		t.Parallel()
+
+		if _, ok := captureRequest(t, basicRequest())["output_config"]; ok {
+			t.Error("output_config was sent for a request that did not ask for one")
+		}
+	})
+
+	// Both live on output_config, so setting one must not clear the other.
+	t.Run("coexists with effort", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.Thinking = &skyl.Thinking{Enabled: true, Effort: skyl.EffortHigh}
+		req.ResponseFormat = &skyl.ResponseFormat{Schema: schema}
+
+		oc := captureRequest(t, req)["output_config"].(map[string]any)
+		if oc["effort"] != "high" {
+			t.Errorf("output_config.effort = %v, want high", oc["effort"])
+		}
+		if _, ok := oc["format"].(map[string]any); !ok {
+			t.Errorf("output_config.format missing when effort is also set: %#v", oc)
+		}
+	})
+}
+
 // TestImageMapping covers both forms. A URL image must be sent by reference
 // rather than being base64'd into an empty payload.
 func TestImageMapping(t *testing.T) {

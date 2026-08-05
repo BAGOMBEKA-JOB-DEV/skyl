@@ -52,6 +52,18 @@ type oaiRequest struct {
 	MaxTokens           int `json:"max_tokens"`
 	MaxCompletionTokens int `json:"max_completion_tokens"`
 
+	// OpenAI nests the schema two levels deep. Decoding the whole shape rather
+	// than just the schema means a request that names the wrong type, or omits
+	// the name OpenAI requires, is visible to a test.
+	ResponseFormat *struct {
+		Type       string `json:"type"`
+		JSONSchema *struct {
+			Name   string         `json:"name"`
+			Strict bool           `json:"strict"`
+			Schema map[string]any `json:"schema"`
+		} `json:"json_schema"`
+	} `json:"response_format"`
+
 	Tools []struct {
 		Type     string `json:"type"`
 		Function struct {
@@ -87,6 +99,14 @@ func (r oaiRequest) maxTokens() int {
 		return r.MaxCompletionTokens
 	}
 	return r.MaxTokens
+}
+
+// responseSchema returns the requested output schema, or nil.
+func (r oaiRequest) responseSchema() map[string]any {
+	if r.ResponseFormat == nil || r.ResponseFormat.JSONSchema == nil {
+		return nil
+	}
+	return r.ResponseFormat.JSONSchema.Schema
 }
 
 // toolChoice normalises tool_choice onto the shared vocabulary.
@@ -196,10 +216,16 @@ func (h *Handler) oaiChat(w http.ResponseWriter, r *http.Request) {
 		call = decideToolCall(prompt, req.toolNames(), mode, forced)
 	}
 
-	// max_tokens only bounds prose. A tool call is emitted whole or not at all,
-	// which is what the real APIs do.
+	// A schema replaces the prose reply entirely, and is never truncated:
+	// max_tokens would leave invalid JSON, which is a failure mode no real
+	// provider has because providers count the document's own tokens.
 	var truncated bool
-	if call == nil {
+	switch schema := req.responseSchema(); {
+	case call != nil:
+		// A tool call is emitted whole or not at all, as the real APIs do.
+	case hasSchema(schema):
+		answer = answerForSchema(schema)
+	default:
 		answer, truncated = truncate(answer, req.maxTokens())
 	}
 

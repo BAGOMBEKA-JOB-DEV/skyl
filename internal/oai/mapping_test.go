@@ -181,6 +181,90 @@ func TestThinkingMapsToReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestResponseFormatMapsToJSONSchema(t *testing.T) {
+	t.Parallel()
+
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"city": map[string]any{"type": "string"}},
+		"required":             []string{"city"},
+		"additionalProperties": false,
+	}
+
+	t.Run("named schema", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.ResponseFormat = &skyl.ResponseFormat{Name: "place", Schema: schema}
+
+		rf, ok := captureRequest(t, req)["response_format"].(map[string]any)
+		if !ok {
+			t.Fatal("response_format is missing or not an object")
+		}
+		if rf["type"] != "json_schema" {
+			t.Errorf("type = %v, want json_schema", rf["type"])
+		}
+		js, ok := rf["json_schema"].(map[string]any)
+		if !ok {
+			t.Fatal("json_schema is missing or not an object")
+		}
+		if js["name"] != "place" {
+			t.Errorf("name = %v, want place", js["name"])
+		}
+		// strict is what turns this from a hint into a guarantee.
+		if js["strict"] != true {
+			t.Errorf("strict = %v, want true", js["strict"])
+		}
+		// The schema must arrive exactly as written — skyl translates no
+		// dialects (ADR-0008).
+		got, ok := js["schema"].(map[string]any)
+		if !ok {
+			t.Fatal("schema is missing or not an object")
+		}
+		if got["additionalProperties"] != false || got["type"] != "object" {
+			t.Errorf("schema was altered in transit: %#v", got)
+		}
+	})
+
+	t.Run("unnamed schema gets a placeholder", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.ResponseFormat = &skyl.ResponseFormat{Schema: schema}
+
+		rf := captureRequest(t, req)["response_format"].(map[string]any)
+		js := rf["json_schema"].(map[string]any)
+		// OpenAI rejects a nameless schema, and the name means nothing to the
+		// caller — so defaulting is kinder than failing.
+		if js["name"] != "response" {
+			t.Errorf("name = %v, want the placeholder %q", js["name"], "response")
+		}
+	})
+
+	t.Run("omitted when nil", func(t *testing.T) {
+		t.Parallel()
+
+		if _, ok := captureRequest(t, basicRequest())["response_format"]; ok {
+			t.Error("response_format was sent for a request that did not ask for one")
+		}
+	})
+
+	t.Run("ProviderOptions still wins", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.ResponseFormat = &skyl.ResponseFormat{Schema: schema}
+		req.ProviderOptions = map[string]any{
+			"response_format": map[string]any{"type": "json_object"},
+		}
+
+		rf := captureRequest(t, req)["response_format"].(map[string]any)
+		if rf["type"] != "json_object" {
+			t.Errorf("type = %v, want json_object — ProviderOptions is merged last and must override", rf["type"])
+		}
+	})
+}
+
 // Images were mapped but never exercised. Both shapes matter: a URL rides
 // through untouched, while raw bytes become a data: URI.
 func TestImageMapping(t *testing.T) {

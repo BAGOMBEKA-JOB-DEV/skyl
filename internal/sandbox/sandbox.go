@@ -209,6 +209,15 @@ func countTokens(s string) int {
 	return n
 }
 
+// maxChunkRunes bounds a single streaming delta.
+//
+// Splitting on whitespace alone is not enough: a structured-output reply is a
+// JSON document with no spaces in it, so it would arrive as one delta and a
+// consumer that treats each delta as parseable JSON would pass here and fail
+// against a real provider. Capping the size forces the fragmented arrival that
+// tool arguments already exercise.
+const maxChunkRunes = 7
+
 // chunk splits a reply into streaming deltas, keeping the trailing space so
 // the concatenation is exactly the non-streamed answer.
 func chunk(s string) []string {
@@ -221,7 +230,14 @@ func chunk(s string) []string {
 		if i < len(words)-1 {
 			w += " "
 		}
-		out = append(out, w)
+		// Split by runes, not bytes: a delta that ends mid-UTF-8 would be a
+		// bug in the sandbox rather than a test of the adapter.
+		r := []rune(w)
+		for len(r) > maxChunkRunes {
+			out = append(out, string(r[:maxChunkRunes]))
+			r = r[maxChunkRunes:]
+		}
+		out = append(out, string(r))
 	}
 	return out
 }

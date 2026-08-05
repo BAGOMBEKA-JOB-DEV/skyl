@@ -303,11 +303,36 @@ adapter had ever spoken to a real provider. This phase closed both.
 **Remaining:** cut the tags. And record cassettes — the live run proved the adapters on
 the day it ran, but nothing replays that proof, so the next regression is invisible again.
 
+## Phase 6 — Structured output ✅
+
+The most-used production feature after chat itself, absent from all four adapters with
+no partial implementation to build on. A caller's only route was `ProviderOptions`, and
+on Gemini that route destroys the sibling keys of `generationConfig` — the escape hatch
+removed the thing it was escaping from.
+
+- **`Request.ResponseFormat` on all four adapters**, each to its own wire shape:
+  `response_format.json_schema` with `strict: true`, `output_config.format`, and
+  `generationConfig.responseSchema` plus `responseMimeType`. The schema is sent
+  **verbatim** — [ADR-0008](adr/0008-structured-output.md) records why translating
+  between dialects would repeat the mistake that already costs this repository two
+  entries on the silently-ignored list.
+- **`Thinking.Effort` reaches Anthropic**, closing a documented gap. It was never a
+  missing capability: effort lives on `output_config.effort`, not on the thinking block
+  where the adapter looked for it. Fourteen silently-ignored cases became thirteen.
+- **The sandbox learned structured output** on all three protocols, and `chunk` now caps
+  delta size — a JSON document has no spaces in it, so without that it arrived as a
+  single delta and the fragmented-arrival case went untested.
+- A contract check and a ninth live check, so no adapter can regress behind another's
+  tests and a real provider's own schema validation is exercised.
+
+**Remaining:** nothing in this phase. The API addition means it should land after the
+`v0.1.0` tags rather than before them.
+
 ## Deferred, deliberately
 
-Embeddings, structured output, prompt-caching control, batch APIs, token counting, and
-failover each need an ADR before code. Embeddings in particular do not belong on
-`Provider` — a different shape deserves a different interface.
+Embeddings, prompt-caching control, batch APIs, token counting, and failover each need
+an ADR before code. Embeddings in particular do not belong on `Provider` — a different
+shape deserves a different interface.
 
 Prompt caching is the sharpest of these: skyl *reports* `CacheWriteTokens` while offering
 no way to *request* caching, and until the Anthropic `ProviderOptions` defect is fixed

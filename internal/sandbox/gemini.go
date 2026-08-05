@@ -68,7 +68,27 @@ type geminiRequest struct {
 	// merge into.
 	GenerationConfig *struct {
 		MaxOutputTokens int `json:"maxOutputTokens"`
+
+		// Gemini splits structured output across two keys. Decoding both means
+		// a test can catch an adapter that sends the schema without the mime
+		// type, which the real API accepts and then quietly ignores.
+		ResponseMIMEType string         `json:"responseMimeType"`
+		ResponseSchema   map[string]any `json:"responseSchema"`
 	} `json:"generationConfig"`
+}
+
+// responseSchema returns the requested output schema, or nil.
+//
+// The mime type is required too: Gemini ignores a schema without it, so a
+// sandbox that honoured the schema alone would hide that mistake.
+func (r geminiRequest) responseSchema() map[string]any {
+	if r.GenerationConfig == nil {
+		return nil
+	}
+	if r.GenerationConfig.ResponseMIMEType != "application/json" {
+		return nil
+	}
+	return r.GenerationConfig.ResponseSchema
 }
 
 // maxTokens reports the request's output cap, or 0 when it set none.
@@ -203,9 +223,15 @@ func (h *Handler) geminiGenerate(w http.ResponseWriter, r *http.Request) {
 		call = decideToolCall(prompt, req.toolNames(), mode, forced)
 	}
 
-	// maxOutputTokens bounds prose only; a functionCall is emitted whole.
+	// A schema replaces prose entirely and is never truncated — see the same
+	// reasoning in the OpenAI handler.
 	var truncated bool
-	if call == nil {
+	switch schema := req.responseSchema(); {
+	case call != nil:
+		// A functionCall is emitted whole.
+	case hasSchema(schema):
+		answer = answerForSchema(schema)
+	default:
 		answer, truncated = truncate(answer, req.maxTokens())
 	}
 
