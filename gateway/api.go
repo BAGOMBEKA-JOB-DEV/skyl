@@ -48,6 +48,10 @@ type ChatRequest struct {
 	// and an explicit off are different instructions.
 	Thinking *ChatThinking `json:"thinking,omitempty"`
 
+	// ResponseFormat constrains the reply to JSON matching a schema. A pointer
+	// because nil means unconstrained prose.
+	ResponseFormat *ChatResponseFormat `json:"response_format,omitempty"`
+
 	// ProviderOptions is forwarded verbatim as skyl's escape hatch.
 	ProviderOptions map[string]any `json:"provider_options,omitempty"`
 }
@@ -132,6 +136,19 @@ type ChatThinking struct {
 	// Effort is "low", "medium", "high", or "max". Empty means the provider's
 	// default.
 	Effort string `json:"effort,omitempty"`
+}
+
+// ChatResponseFormat constrains the reply to JSON matching a schema.
+//
+// The schema is forwarded verbatim; neither the gateway nor skyl translates
+// between provider dialects, so a schema must suit the provider it is sent to.
+type ChatResponseFormat struct {
+	// Schema is the JSON Schema the reply must satisfy. Required.
+	Schema map[string]any `json:"schema"`
+
+	// Name identifies the schema. OpenAI requires one and supplies a default
+	// when it is absent; the other providers ignore it.
+	Name string `json:"name,omitempty"`
 }
 
 // ChatResponse is the JSON body returned by POST /v1/chat.
@@ -244,6 +261,16 @@ func (r *ChatRequest) toSkylRequest() (*skyl.Request, error) {
 			Enabled: th.Enabled,
 			Effort:  skyl.Effort(th.Effort),
 		}
+	}
+
+	if rf := r.ResponseFormat; rf != nil {
+		// Named here rather than left to Request.Validate so the message says
+		// which *wire* field is wrong. An operator reading a 400 should not
+		// have to map skyl's field names back onto the JSON they sent.
+		if len(rf.Schema) == 0 {
+			return nil, &badRequestError{"response_format: schema is required and must not be empty"}
+		}
+		out.ResponseFormat = &skyl.ResponseFormat{Schema: rf.Schema, Name: rf.Name}
 	}
 
 	return out, nil

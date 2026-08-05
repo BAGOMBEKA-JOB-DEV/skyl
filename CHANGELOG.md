@@ -8,6 +8,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Until v1.0.0, breaking changes may land in minor releases. They will always be
 listed here with a migration note.
 
+## [Unreleased]
+
+### Added
+
+- **Structured output.** `Request.ResponseFormat` constrains a reply to JSON
+  matching a schema, on all four adapters —
+  `response_format.json_schema` with `strict: true` on openai/openaicompat,
+  `output_config.format` on anthropic, and
+  `generationConfig.responseSchema` plus `responseMimeType` on gemini. The
+  schema is sent **verbatim**: skyl translates no dialects, so a schema must
+  suit the provider it is sent to. See
+  [ADR-0008](docs/adr/0008-structured-output.md) and the
+  [feature matrix](docs/feature-matrix.md#responseformat).
+
+  The reply arrives in the ordinary text channel, so `Response.Text()` is the
+  JSON document and the caller unmarshals it. skyl does not validate a reply
+  against the schema it sent, for the same reason it does not validate
+  `ToolCall.Arguments`.
+
+  Reachable over the gateway as `response_format` on `POST /v1/chat`.
+
+### Fixed
+
+- **`Thinking.Effort` now reaches Anthropic.** It was documented as silently
+  ignored because the thinking block has no such field — it lives on
+  `output_config.effort` instead, so the gap was a lookup in the wrong place
+  rather than a missing capability. This removes one of the fourteen entries
+  from the feature matrix's "silently ignored" list, leaving thirteen.
+
+- The sandbox now honours `max_tokens`-style truncation *and* structured
+  output on all three wire protocols, so `-tags=sandbox` exercises both rather
+  than passing regardless.
+
 ## [0.1.0] — 2026-08-05
 
 The first release. Everything below is the initial build of skyl: the repository
@@ -296,4 +329,5 @@ release, so neither ever shipped.
   not pull in a router.
   ([ADR-0003](docs/adr/0003-gateway-as-separate-module.md))
 
+[Unreleased]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/releases/tag/v0.1.0

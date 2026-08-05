@@ -57,6 +57,25 @@ type anthropicRequest struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
 	} `json:"tool_choice"`
+
+	// Anthropic carries the schema on output_config, beside the effort hint —
+	// which is why effort used to be dropped by the adapter: it was looked for
+	// on the thinking block, where it does not live.
+	OutputConfig *struct {
+		Effort string `json:"effort"`
+		Format *struct {
+			Type   string         `json:"type"`
+			Schema map[string]any `json:"schema"`
+		} `json:"format"`
+	} `json:"output_config"`
+}
+
+// responseSchema returns the requested output schema, or nil.
+func (r anthropicRequest) responseSchema() map[string]any {
+	if r.OutputConfig == nil || r.OutputConfig.Format == nil {
+		return nil
+	}
+	return r.OutputConfig.Format.Schema
 }
 
 func (r anthropicRequest) toolNames() []string {
@@ -205,9 +224,15 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		call = decideToolCall(prompt, req.toolNames(), mode, forced)
 	}
 
-	// max_tokens bounds prose only; a tool_use block is emitted whole.
+	// A schema replaces prose entirely and is never truncated — see the same
+	// reasoning in the OpenAI handler.
 	var truncated bool
-	if call == nil {
+	switch schema := req.responseSchema(); {
+	case call != nil:
+		// A tool_use block is emitted whole.
+	case hasSchema(schema):
+		answer = answerForSchema(schema)
+	default:
 		answer, truncated = truncate(answer, req.MaxTokens)
 	}
 

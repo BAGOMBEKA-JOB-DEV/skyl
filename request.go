@@ -72,6 +72,46 @@ type Thinking struct {
 	Effort Effort
 }
 
+// ResponseFormat constrains the reply to JSON matching a schema.
+//
+// Every provider skyl targets supports this, but they do not agree on the
+// schema dialect, and skyl does not translate between them — see
+// [ADR-0008]. Test a schema against the providers you actually use.
+//
+// The reply arrives as ordinary assistant text, so [Response.Text] returns the
+// JSON document and the caller unmarshals it:
+//
+//	resp, err := client.Complete(ctx, req)
+//	if err != nil {
+//		return err
+//	}
+//	var out MyType
+//	if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
+//		return err
+//	}
+//
+// skyl does not validate the reply against the schema it sent, for the same
+// reason it does not validate [ToolCall.Arguments]: the schema is yours, the
+// target type is yours, and a partial check invites trust it has not earned.
+//
+// [ADR-0008]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/blob/main/docs/adr/0008-structured-output.md
+type ResponseFormat struct {
+	// Schema is the JSON Schema the reply must satisfy. It is required, and
+	// it is sent verbatim.
+	//
+	// Portability is the sharp edge. OpenAI's strict mode requires
+	// "additionalProperties": false and every property listed in "required";
+	// Gemini accepts an OpenAPI 3.0 subset rather than JSON Schema, with no
+	// $ref. A schema one provider accepts may come back as another's 400 —
+	// which is skyl declining to guess at what your schema means, not skyl
+	// failing to try.
+	Schema map[string]any
+
+	// Name identifies the schema. OpenAI requires one and the other providers
+	// ignore it; empty means skyl supplies a placeholder rather than failing.
+	Name string
+}
+
 // Request is a provider-agnostic model call.
 //
 // The same Request can be sent to any provider. Fields a provider does not
@@ -124,6 +164,10 @@ type Request struct {
 
 	// Thinking requests reasoning. Nil means the provider's default.
 	Thinking *Thinking
+
+	// ResponseFormat constrains the reply to JSON matching a schema. Nil means
+	// unconstrained prose.
+	ResponseFormat *ResponseFormat
 
 	// ProviderOptions is an escape hatch: arbitrary vendor-specific fields
 	// merged into the outbound payload, overriding anything skyl set.
@@ -181,6 +225,13 @@ func (r *Request) Validate() error {
 		default:
 			return fmt.Errorf("%w: unknown tool choice mode %q", ErrBadRequest, r.ToolChoice.Mode)
 		}
+	}
+
+	// Structural only. The schema's *contents* are not checked, for the same
+	// reason Tool.Parameters is not: the dialects differ per provider, and a
+	// check that passed here but failed upstream would be worse than no check.
+	if r.ResponseFormat != nil && len(r.ResponseFormat.Schema) == 0 {
+		return fmt.Errorf("%w: response format requires a schema", ErrBadRequest)
 	}
 
 	return nil

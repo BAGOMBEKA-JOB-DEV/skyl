@@ -84,6 +84,56 @@ func TestSamplingParametersOmittedWhenUnset(t *testing.T) {
 	}
 }
 
+func TestResponseFormatBecomesResponseSchema(t *testing.T) {
+	t.Parallel()
+
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"city": map[string]any{"type": "string"}},
+		"required":   []string{"city"},
+	}
+
+	t.Run("sets both mime type and schema", func(t *testing.T) {
+		t.Parallel()
+
+		req := basicRequest()
+		req.ResponseFormat = &skyl.ResponseFormat{Name: "place", Schema: schema}
+
+		gen := generationConfig(t, captureRequest(t, req))
+
+		// The schema alone is accepted and then ignored — the mime type is what
+		// actually switches the model into JSON mode.
+		if gen["responseMimeType"] != "application/json" {
+			t.Errorf("responseMimeType = %v, want application/json", gen["responseMimeType"])
+		}
+		got, ok := gen["responseSchema"].(map[string]any)
+		if !ok {
+			t.Fatalf("responseSchema = %v, want an object", gen["responseSchema"])
+		}
+		if got["type"] != "object" {
+			t.Errorf("schema was altered in transit: %#v", got)
+		}
+		// Gemini's schema is anonymous; Name has nowhere to go and must not
+		// leak into generationConfig under some invented key.
+		for k := range gen {
+			if k == "name" || k == "responseSchemaName" {
+				t.Errorf("Name leaked into generationConfig as %q", k)
+			}
+		}
+	})
+
+	t.Run("omitted when nil", func(t *testing.T) {
+		t.Parallel()
+
+		gen, _ := captureRequest(t, basicRequest())["generationConfig"].(map[string]any)
+		for _, field := range []string{"responseMimeType", "responseSchema"} {
+			if _, ok := gen[field]; ok {
+				t.Errorf("%s was sent for a request that did not ask for one", field)
+			}
+		}
+	})
+}
+
 func TestToolsBecomeFunctionDeclarations(t *testing.T) {
 	t.Parallel()
 

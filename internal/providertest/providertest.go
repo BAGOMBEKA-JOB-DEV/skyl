@@ -87,6 +87,7 @@ func (s Suite) Run(t *testing.T) {
 	t.Run(s.Name+"/reads model from response", s.testModelFromResponse)
 	t.Run(s.Name+"/accepts any model id", s.testAnyModelID)
 	t.Run(s.Name+"/honours ProviderOptions", s.testProviderOptions)
+	t.Run(s.Name+"/sends the response schema", s.testResponseFormat)
 	t.Run(s.Name+"/classifies errors", s.testErrorClassification)
 	t.Run(s.Name+"/never leaks the credential", s.testCredentialNeverLeaks)
 	t.Run(s.Name+"/honours context cancellation", s.testContextCancellation)
@@ -214,6 +215,53 @@ func (s Suite) testAnyModelID(t *testing.T) {
 // a typed request struct rather than a map can forget it silently — which is
 // exactly what provider/anthropic did — so the check belongs here, where every
 // adapter runs it, rather than in one adapter's own tests.
+// A ResponseFormat must reach the wire, and the schema must arrive intact.
+//
+// The three wire shapes share no key, so this cannot assert a location — it
+// asserts that the schema's own contents appear somewhere in the encoded body.
+// That is weaker than the per-adapter mapping tests and deliberately so: what
+// belongs here is the vendor-neutral half, that the field is not silently
+// dropped, which is exactly the failure §6.1 exists to prevent.
+//
+// It also catches the subtler bug the per-adapter tests can miss: an adapter
+// that rebuilds the schema rather than passing it through, losing a key on the
+// way (ADR-0008).
+func (s Suite) testResponseFormat(t *testing.T) {
+	var body []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(s.SuccessBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	req := s.request()
+	// A property name no adapter models, so finding it proves the caller's
+	// schema was transmitted rather than something reconstructed.
+	req.ResponseFormat = &skyl.ResponseFormat{
+		Name: "skyl_test_schema",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"skyl_test_property": map[string]any{"type": "string"},
+			},
+			"required": []string{"skyl_test_property"},
+		},
+	}
+
+	if _, err := s.New(srv.URL).Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if len(body) == 0 {
+		t.Fatal("no request body was sent")
+	}
+	if !strings.Contains(string(body), "skyl_test_property") {
+		t.Errorf("the response schema never reached the wire; "+
+			"docs/rules.md §6.1 forbids dropping request data silently.\nbody: %s", body)
+	}
+}
+
 func (s Suite) testProviderOptions(t *testing.T) {
 	var captured map[string]any
 

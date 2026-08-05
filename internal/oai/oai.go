@@ -198,6 +198,28 @@ func (c *Client) buildPayload(req *skyl.Request, stream bool) (map[string]any, e
 		// Reasoning-capable hosts accept an effort hint; others ignore it.
 		payload["reasoning_effort"] = string(req.Thinking.Effort)
 	}
+	if rf := req.ResponseFormat; rf != nil {
+		// strict is what makes this a guarantee rather than a suggestion, and
+		// the guarantee is the reason to use the feature at all. It does oblige
+		// the schema to satisfy OpenAI's stricter rules — every property in
+		// "required", "additionalProperties": false — and a schema that does not
+		// comes back as OpenAI's own 400 rather than as silently loose output.
+		//
+		// OpenAI requires a name; the other adapters have nowhere to put one.
+		// Defaulting beats rejecting: the field is meaningless to most callers.
+		name := rf.Name
+		if name == "" {
+			name = "response"
+		}
+		payload["response_format"] = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   name,
+				"strict": true,
+				"schema": rf.Schema,
+			},
+		}
+	}
 
 	return httpx.Merge(payload, req.ProviderOptions), nil
 }

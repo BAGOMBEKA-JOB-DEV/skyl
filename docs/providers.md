@@ -142,6 +142,13 @@ Tool calling, streaming, and multimodal support vary by host and by model.
 skyl surfaces what the endpoint returns; where a host rejects a feature, you
 get that host's error, classified, rather than a skyl-invented one.
 
+**Structured output is the sharpest instance.** `Request.ResponseFormat` sends
+`response_format: {"type": "json_schema", …}` with `strict: true`, which OpenAI
+guarantees. Many compatible hosts implement only the older
+`{"type": "json_object"}` — plain JSON mode with no schema — and either reject
+`json_schema` outright or, worse, accept it and ignore the schema. Test it
+against the host you are using before you depend on it.
+
 Use a native adapter when you want a vendor's deep features. Use
 `openaicompat` for reach.
 

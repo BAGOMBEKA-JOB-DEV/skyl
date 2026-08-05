@@ -33,6 +33,43 @@ func TestRequestValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "response format with a schema",
+			req: &Request{
+				Model:    "m",
+				Messages: []Message{UserText("hi")},
+				ResponseFormat: &ResponseFormat{
+					Name:   "person",
+					Schema: map[string]any{"type": "object"},
+				},
+			},
+		},
+		{
+			name: "response format without a name is fine",
+			req: &Request{
+				Model:          "m",
+				Messages:       []Message{UserText("hi")},
+				ResponseFormat: &ResponseFormat{Schema: map[string]any{"type": "object"}},
+			},
+		},
+		{
+			name: "response format with no schema",
+			req: &Request{
+				Model:          "m",
+				Messages:       []Message{UserText("hi")},
+				ResponseFormat: &ResponseFormat{Name: "person"},
+			},
+			wantErr: true, wantIn: "response format requires a schema",
+		},
+		{
+			name: "response format with an empty schema map",
+			req: &Request{
+				Model:          "m",
+				Messages:       []Message{UserText("hi")},
+				ResponseFormat: &ResponseFormat{Schema: map[string]any{}},
+			},
+			wantErr: true, wantIn: "response format requires a schema",
+		},
+		{
 			name:    "nil request",
 			req:     nil,
 			wantErr: true, wantIn: "nil request",

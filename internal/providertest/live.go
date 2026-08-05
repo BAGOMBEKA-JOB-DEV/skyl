@@ -62,6 +62,7 @@ func (l Live) Run(t *testing.T) {
 	t.Run(l.Name+"/tool round trip", func(t *testing.T) { l.testToolRoundTrip(t, p) })
 	t.Run(l.Name+"/streamed tool call", func(t *testing.T) { l.testStreamingToolCall(t, p) })
 	t.Run(l.Name+"/stops at max tokens", func(t *testing.T) { l.testMaxTokensStop(t, p) })
+	t.Run(l.Name+"/structured output", func(t *testing.T) { l.testStructuredOutput(t, p) })
 }
 
 // weatherTool is the fixture for the tool-calling checks. A single required
@@ -365,6 +366,61 @@ func (l Live) testMaxTokensStop(t *testing.T, p skyl.Provider) {
 	if u.CacheWriteTokens > u.InputTokens {
 		t.Errorf("CacheWriteTokens %d exceeds InputTokens %d; see the inclusion semantics on skyl.Usage",
 			u.CacheWriteTokens, u.InputTokens)
+	}
+}
+
+// Structured output is the check with the widest gap between what a fake can
+// prove and what only a provider can. The three wire shapes share no key, and
+// each provider validates the schema itself: OpenAI's strict mode rejects a
+// schema missing "additionalProperties": false, and Gemini accepts an OpenAPI
+// subset rather than JSON Schema. A schema our sandbox happily echoes can be a
+// 400 here, which is precisely the finding this suite exists to surface.
+func (l Live) testStructuredOutput(t *testing.T, p skyl.Provider) {
+	ctx, cancel := ctxWithTimeout(t)
+	defer cancel()
+
+	// Deliberately strict-mode-clean: every property required,
+	// additionalProperties false. A schema that fails on OpenAI for want of
+	// those would be testing our fixture rather than the adapter.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"city":    map[string]any{"type": "string"},
+			"country": map[string]any{"type": "string"},
+		},
+		"required":             []string{"city", "country"},
+		"additionalProperties": false,
+	}
+
+	resp, err := p.Complete(ctx, &skyl.Request{
+		Model:     l.Model,
+		MaxTokens: 256,
+		Messages:  []skyl.Message{skyl.UserText("What is the capital of France, and which country is it in?")},
+		ResponseFormat: &skyl.ResponseFormat{
+			Name:   "location",
+			Schema: schema,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete() with a response format = %v", err)
+	}
+
+	// The document arrives in the ordinary text channel (ADR-0008), so this is
+	// also the assertion that it is not hidden somewhere skyl does not read.
+	var got struct {
+		City    string `json:"city"`
+		Country string `json:"country"`
+	}
+	if err := json.Unmarshal([]byte(resp.Text()), &got); err != nil {
+		t.Fatalf("reply is not valid JSON despite a schema: %v\nreply: %q", err, resp.Text())
+	}
+	// Both properties were declared required, so both must be present. What
+	// the model *said* is not asserted: the complete and stream checks already
+	// prove the prompt lands, and pinning an answer here would be testing the
+	// model rather than the adapter — and would make this the one check the
+	// sandbox could not also run.
+	if got.City == "" || got.Country == "" {
+		t.Errorf("reply does not satisfy the schema it was given: %q", resp.Text())
 	}
 }
 
