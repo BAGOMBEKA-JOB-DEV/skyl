@@ -203,8 +203,8 @@ what the code needs fails the build rather than reaching a user.
   and a test walks every committed fixture looking for credential-shaped
   strings. Replay tests are untagged, so they begin asserting in ordinary CI as
   soon as a recording lands.
-- **`Example` functions** (rules.md §8.3, previously zero) — ten runnable, with
-  verified output.
+- **`Example` functions** (rules.md §8.3, previously zero) — twelve runnable,
+  with verified output.
 - **Benchmarks** on the per-token paths: SSE frame parsing, per-chunk JSON
   decode, tool-argument accumulation, and payload construction.
 - `docs/roadmap.md` — what stands between this and production use, from an

@@ -56,7 +56,7 @@ The provider-agnostic types and the client that drives them.
 
 ### M5 — CI ✅
 
-- [x] Build, vet, test, race across all three modules
+- [x] Build, vet, test, race across all four modules
 - [x] `gofmt` and `go mod tidy` enforcement
 - [x] `golangci-lint` config
 - [x] Per-module coverage floors that fail the build

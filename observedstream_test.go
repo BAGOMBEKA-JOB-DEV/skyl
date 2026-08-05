@@ -85,6 +85,58 @@ func TestStreamEndReportsUsageOnDrain(t *testing.T) {
 	}
 }
 
+// A drained stream that is never closed still reports.
+//
+// The [Stream] contract does not oblige a caller to close a stream it has run
+// to completion, so `for s.Next() {}` with no Close is a legal — and common —
+// shape. Emitting only from Close made that shape silent: the usage was known,
+// recorded, and then thrown away. Every other test in this file happens to call
+// Close, which is precisely why the gap survived.
+func TestStreamEndFiresWithoutCloseOnDrainedStream(t *testing.T) {
+	t.Parallel()
+
+	var events []HookEvent
+	p := &fakeProvider{
+		stream: &scriptedStream{
+			events: []StreamEvent{
+				{Type: EventTextDelta, Text: "hi"},
+				{
+					Type:       EventDone,
+					Usage:      &Usage{InputTokens: 11, OutputTokens: 7},
+					StopReason: StopEndTurn,
+				},
+			},
+		},
+	}
+
+	s, err := New(p, recordHooks(&events)).Stream(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	for s.Next() { //nolint:revive // draining without Close is the point
+	}
+	// Deliberately no Close.
+
+	ends := eventsOfType(events, OpStreamEnd)
+	if len(ends) != 1 {
+		t.Fatalf("got %d %s events, want exactly 1 — a drained stream must report even unclosed", len(ends), OpStreamEnd)
+	}
+	if !ends[0].Completed {
+		t.Error("Completed = false for a fully drained stream")
+	}
+	if ends[0].Usage.InputTokens != 11 || ends[0].Usage.OutputTokens != 7 {
+		t.Errorf("Usage = %+v, want 11/7 — the usage was known and must not be dropped", ends[0].Usage)
+	}
+
+	// And closing afterwards must not double-report.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if got := len(eventsOfType(events, OpStreamEnd)); got != 1 {
+		t.Errorf("got %d %s events after a late Close, want 1 — emit must latch", got, OpStreamEnd)
+	}
+}
+
 // The case the design exists for. A caller that returns early — or a client
 // that hangs up, which is what the gateway sees every day — still consumed
 // tokens upstream. Reporting nothing would make that spend invisible.

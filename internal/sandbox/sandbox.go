@@ -175,6 +175,27 @@ func reply(prompt string) string {
 	}
 }
 
+// truncate applies a request's max_tokens the way a real provider does:
+// generation stops part-way through and the finish reason says so.
+//
+// It reports whether truncation happened, because that is the whole point. A
+// provider that reports a truncated answer as a complete one is silent data
+// loss, and the stop-reason mapping that prevents it is per-provider and easy
+// to get wrong — so the sandbox has to be able to produce the case at all.
+//
+// The unit is words, matching countTokens, so the two agree about what a token
+// is within the sandbox even though neither matches a real tokenizer.
+func truncate(answer string, maxTokens int) (string, bool) {
+	if maxTokens <= 0 {
+		return answer, false
+	}
+	words := strings.Fields(answer)
+	if len(words) <= maxTokens {
+		return answer, false
+	}
+	return strings.Join(words[:maxTokens], " "), true
+}
+
 // countTokens approximates usage by counting words.
 //
 // Real tokenizers split differently, so this is only ever a plausible non-zero

@@ -12,6 +12,7 @@ Start with **[idea.md](idea.md)** for why skyl exists, or
 | [providers.md](providers.md) | You need to know which providers and models are reachable, and how discovery works |
 | [gateway.md](gateway.md) | You want to expose skyl over HTTP |
 | [sandbox.md](sandbox.md) | You want to develop or test without credentials, or to force provider failures |
+| [validating.md](validating.md) | You have provider keys and want to close the live-validation gap |
 | [architecture.md](architecture.md) | You are contributing, or want to know why it is built this way |
 | [project-plan.md](project-plan.md) | You want milestone status and what is coming |
 | [rules.md](rules.md) | You are about to open a PR |
@@ -29,6 +30,7 @@ after the discussion is forgotten.
 | [0004](adr/0004-model-ids-are-pass-through.md) | Model IDs are opaque pass-through strings |
 | [0005](adr/0005-no-copilot-provider.md) | No GitHub Copilot provider |
 | [0006](adr/0006-anthropic-adapter-is-its-own-module.md) | The Anthropic adapter is its own module |
+| [0007](adr/0007-otel-is-its-own-module.md) | OpenTelemetry instrumentation is its own module |
 
 New ADRs: copy the format of an existing one — Context, Decision, Consequences
 (good *and* bad), Alternatives considered. An ADR that lists no downside has not

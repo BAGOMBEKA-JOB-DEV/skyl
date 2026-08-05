@@ -205,16 +205,25 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		call = decideToolCall(prompt, req.toolNames(), mode, forced)
 	}
 
+	// max_tokens bounds prose only; a tool_use block is emitted whole.
+	var truncated bool
+	if call == nil {
+		answer, truncated = truncate(answer, req.MaxTokens)
+	}
+
 	inTokens := countTokens(prompt)
 	outTokens := countTokens(answer)
 
 	if req.Stream {
-		h.anthropicStream(w, req.Model, answer, call, fault, inTokens, outTokens)
+		h.anthropicStream(w, req.Model, answer, call, fault, inTokens, outTokens, truncated)
 		return
 	}
 
 	content := []any{map[string]any{"type": "text", "text": answer}}
 	stopReason := "end_turn"
+	if truncated {
+		stopReason = "max_tokens"
+	}
 	if call != nil {
 		var input map[string]any
 		// Unlike OpenAI, Anthropic sends tool input as a decoded object rather
@@ -247,7 +256,7 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 
 // anthropicStream emits the documented event sequence. The SDK accumulates
 // these into a message, so the order and the names both matter.
-func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int) {
+func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, call *toolCall, fault string, in, out int, truncated bool) {
 	flush := beginSSE(w)
 
 	send := func(event string, payload any) {
@@ -315,6 +324,9 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, model, answer string, c
 	send("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 
 	stopReason := "end_turn"
+	if truncated {
+		stopReason = "max_tokens"
+	}
 	if call != nil {
 		// A tool call is a *second* content block, at index 1. The index was
 		// hardcoded to 0 throughout this file before, which would have let an

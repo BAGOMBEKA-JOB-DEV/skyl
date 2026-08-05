@@ -11,6 +11,13 @@
 # Test binary, built with `go test -c`
 *.test
 
+# Built binaries. The stock template only covers extensions, which catches
+# nothing on Linux — `go build ./cmd/skyl-gateway` produces a 22 MB file named
+# exactly this, and `git add -A` would happily commit it.
+/gateway/skyl-gateway
+/skyl-gateway
+/skyl-sandbox
+
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 

@@ -27,10 +27,10 @@ import (
 // event would make every one of those silent, and those tokens were generated
 // and billed regardless.
 //
-// Firing only on Close has the opposite problem: a completed stream that the
-// caller also closes would report whatever usage happened to be known rather
-// than the real total, and a zero would be indistinguishable from a genuine
-// zero.
+// Firing only on Close has the opposite problem: the [Stream] contract does not
+// oblige a caller to close a stream it has already drained, so a plain
+// `for s.Next() { … }` loop would report nothing at all — the one shape most
+// callers write, and the one where usage is actually known.
 //
 // So it fires on whichever comes first and latches. [HookEvent.Completed] is
 // what tells the two apart, and it is the field a cost dashboard should check
@@ -65,16 +65,24 @@ func (s *observedStream) Next() bool {
 		return false
 	}
 
-	// EventDone is the stream saying it finished cleanly, and is the only
-	// place usage arrives. Record it here rather than emitting immediately:
-	// the caller may still call Next again, and the event should describe the
-	// stream's whole life.
+	// EventDone is the stream saying it finished cleanly, and is the only place
+	// usage arrives. Record the totals, then emit immediately rather than
+	// waiting for Close: the [Stream] contract does not require a caller to
+	// close a stream it has drained, so waiting would lose the event — and with
+	// it the usage — for every caller that simply loops until Next is false.
+	//
+	// Emitting here also dates the event from when the stream actually ended
+	// rather than from whenever the caller got round to closing it, which is
+	// what Duration should mean.
+	//
+	// emit latches on s.fired, so the Close that usually follows is a no-op.
 	if ev := s.inner.Event(); ev.Type == EventDone {
 		s.completed = true
 		if ev.Usage != nil {
 			s.usage = *ev.Usage
 		}
 		s.stopReason = ev.StopReason
+		s.emit()
 	}
 	return true
 }

@@ -160,6 +160,10 @@ go test -tags=integration ./provider/
 cd provider/anthropic && go test -tags=integration ./...
 ```
 
+Eight checks per provider, about nine upstream requests, pennies on a small
+model. [docs/validating.md](docs/validating.md) covers what each one proves and
+how to tell an adapter bug from a model being unhelpful.
+
 To develop against skyl before you have any key, run the local sandbox — it
 speaks all four providers' wire protocols and costs nothing. See
 [docs/sandbox.md](docs/sandbox.md).

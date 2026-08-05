@@ -2,6 +2,7 @@ package providertest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -57,6 +58,30 @@ func (l Live) Run(t *testing.T) {
 	t.Run(l.Name+"/complete", func(t *testing.T) { l.testComplete(t, p) })
 	t.Run(l.Name+"/stream", func(t *testing.T) { l.testStream(t, p) })
 	t.Run(l.Name+"/rejects a bogus model", func(t *testing.T) { l.testBogusModel(t, p) })
+	t.Run(l.Name+"/tool call", func(t *testing.T) { l.testToolCall(t, p) })
+	t.Run(l.Name+"/tool round trip", func(t *testing.T) { l.testToolRoundTrip(t, p) })
+	t.Run(l.Name+"/streamed tool call", func(t *testing.T) { l.testStreamingToolCall(t, p) })
+	t.Run(l.Name+"/stops at max tokens", func(t *testing.T) { l.testMaxTokensStop(t, p) })
+}
+
+// weatherTool is the fixture for the tool-calling checks. A single required
+// string parameter keeps the schema trivial, so a failure means the tool
+// *mapping* is wrong rather than that the model was confused by the schema.
+func weatherTool() skyl.Tool {
+	return skyl.Tool{
+		Name:        "get_weather",
+		Description: "Get the current weather for a city. Call this whenever the user asks about weather.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{
+					"type":        "string",
+					"description": "The city name, e.g. Paris",
+				},
+			},
+			"required": []string{"city"},
+		},
+	}
 }
 
 func ctxWithTimeout(t *testing.T) (context.Context, context.CancelFunc) {
@@ -170,6 +195,176 @@ func (l Live) testStream(t *testing.T, p skyl.Provider) {
 	}
 	if !sawEnd {
 		t.Error("stream never emitted a terminal event, so usage is unreachable")
+	}
+}
+
+// Tool calling is the least verifiable path offline: the request carries a
+// JSON Schema the provider validates, and the reply carries an ID format and an
+// argument encoding that no fake can confirm. A schema our fake accepts and the
+// provider rejects is exactly the class of defect this suite exists to find.
+func (l Live) testToolCall(t *testing.T, p skyl.Provider) {
+	ctx, cancel := ctxWithTimeout(t)
+	defer cancel()
+
+	resp, err := p.Complete(ctx, &skyl.Request{
+		Model:      l.Model,
+		MaxTokens:  256,
+		Messages:   []skyl.Message{skyl.UserText("What is the weather in Paris?")},
+		Tools:      []skyl.Tool{weatherTool()},
+		ToolChoice: &skyl.ToolChoice{Mode: skyl.ToolChoiceRequired},
+	})
+	if err != nil {
+		t.Fatalf("Complete() with a tool = %v", err)
+	}
+
+	calls := resp.ToolCalls()
+	if len(calls) == 0 {
+		t.Fatalf("no tool call returned despite ToolChoiceRequired; StopReason=%q text=%q",
+			resp.StopReason, resp.Text())
+	}
+	call := calls[0]
+
+	if call.ID == "" {
+		t.Error("ToolCall.ID is empty; without it the result cannot be correlated back")
+	}
+	if call.Name != "get_weather" {
+		t.Errorf("ToolCall.Name = %q, want %q", call.Name, "get_weather")
+	}
+
+	// The arguments must be a JSON object matching the declared schema. skyl
+	// never validates this (by design), so a live check is the only place the
+	// round trip is proven to produce usable JSON.
+	var args struct {
+		City string `json:"city"`
+	}
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		t.Fatalf("ToolCall.Arguments is not valid JSON: %v (raw: %s)", err, call.Arguments)
+	}
+	if args.City == "" {
+		t.Errorf("tool arguments carry no city: %s", call.Arguments)
+	}
+	if resp.StopReason != skyl.StopToolUse {
+		t.Errorf("StopReason = %q, want %q — stop-reason mapping is per-provider and easy to get wrong",
+			resp.StopReason, skyl.StopToolUse)
+	}
+}
+
+// The multi-turn half. Sending a tool *result* back is where message ordering,
+// role naming and the tool_result encoding all have to be right at once, and
+// where the adapters differ most from each other.
+func (l Live) testToolRoundTrip(t *testing.T, p skyl.Provider) {
+	ctx, cancel := ctxWithTimeout(t)
+	defer cancel()
+
+	first, err := p.Complete(ctx, &skyl.Request{
+		Model:      l.Model,
+		MaxTokens:  256,
+		Messages:   []skyl.Message{skyl.UserText("What is the weather in Paris?")},
+		Tools:      []skyl.Tool{weatherTool()},
+		ToolChoice: &skyl.ToolChoice{Mode: skyl.ToolChoiceRequired},
+	})
+	if err != nil {
+		t.Fatalf("first Complete() = %v", err)
+	}
+	calls := first.ToolCalls()
+	if len(calls) == 0 {
+		t.Skip("provider returned no tool call; the round trip has nothing to answer")
+	}
+
+	// Replay the assistant turn verbatim, then answer it. Replaying the
+	// provider's own message is the point: a lossy Message round trip shows up
+	// here as a 400 and nowhere else.
+	second, err := p.Complete(ctx, &skyl.Request{
+		Model:     l.Model,
+		MaxTokens: 256,
+		Messages: []skyl.Message{
+			skyl.UserText("What is the weather in Paris?"),
+			first.Message,
+			skyl.ToolResultMessage(calls[0].ID, `{"temp_c": 18, "condition": "cloudy"}`),
+		},
+		Tools: []skyl.Tool{weatherTool()},
+	})
+	if err != nil {
+		t.Fatalf("second Complete() with a tool result = %v", err)
+	}
+	if second.Text() == "" {
+		t.Error("no text after the tool result; the model was given the answer and said nothing")
+	}
+	if !strings.Contains(second.Text(), "18") && !strings.Contains(strings.ToLower(second.Text()), "cloud") {
+		t.Errorf("reply = %q, want it to reflect the tool result — the result may not have reached the model",
+			second.Text())
+	}
+}
+
+// Streaming tool calls arrive as argument fragments that must be accumulated
+// before the JSON is valid. The accumulation is unit-tested against our own
+// fragmentation; only a real provider fragments the way a real provider does.
+func (l Live) testStreamingToolCall(t *testing.T, p skyl.Provider) {
+	ctx, cancel := ctxWithTimeout(t)
+	defer cancel()
+
+	stream, err := p.Stream(ctx, &skyl.Request{
+		Model:      l.Model,
+		MaxTokens:  256,
+		Messages:   []skyl.Message{skyl.UserText("What is the weather in Paris?")},
+		Tools:      []skyl.Tool{weatherTool()},
+		ToolChoice: &skyl.ToolChoice{Mode: skyl.ToolChoiceRequired},
+	})
+	if err != nil {
+		t.Fatalf("Stream() with a tool = %v", err)
+	}
+	defer stream.Close() //nolint:errcheck // test cleanup
+
+	var calls []skyl.ToolCall
+	for stream.Next() {
+		if ev := stream.Event(); ev.Type == skyl.EventToolCall && ev.ToolCall != nil {
+			calls = append(calls, *ev.ToolCall)
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("Err() = %v", err)
+	}
+	if len(calls) == 0 {
+		t.Fatal("stream produced no tool call despite ToolChoiceRequired")
+	}
+	for _, c := range calls {
+		if !json.Valid(c.Arguments) {
+			t.Errorf("streamed tool %q has invalid JSON arguments: %s — fragments did not reassemble",
+				c.Name, c.Arguments)
+		}
+	}
+}
+
+// Stop reasons are provider-specific strings mapped to skyl's own set, and a
+// truncation that reports StopEndTurn is indistinguishable from a complete
+// answer. Forcing the truncation is the only way to prove the mapping.
+func (l Live) testMaxTokensStop(t *testing.T, p skyl.Provider) {
+	ctx, cancel := ctxWithTimeout(t)
+	defer cancel()
+
+	resp, err := p.Complete(ctx, &skyl.Request{
+		Model:     l.Model,
+		MaxTokens: 8,
+		Messages:  []skyl.Message{skyl.UserText("Count slowly from one to one hundred in words.")},
+	})
+	if err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+	if resp.StopReason != skyl.StopMaxTokens {
+		t.Errorf("StopReason = %q, want %q — a truncated answer reported as complete is silent data loss",
+			resp.StopReason, skyl.StopMaxTokens)
+	}
+
+	// The inclusion rule documented on skyl.Usage. Every adapter normalises to
+	// it, and no fake can prove the provider's own numbers obey it.
+	u := resp.Usage
+	if u.CacheReadTokens > u.InputTokens {
+		t.Errorf("CacheReadTokens %d exceeds InputTokens %d; cache figures must be a breakdown of input, not an addition",
+			u.CacheReadTokens, u.InputTokens)
+	}
+	if u.CacheWriteTokens > u.InputTokens {
+		t.Errorf("CacheWriteTokens %d exceeds InputTokens %d; see the inclusion semantics on skyl.Usage",
+			u.CacheWriteTokens, u.InputTokens)
 	}
 }
 
