@@ -281,8 +281,13 @@ jobs:
 
       - name: govulncheck
         working-directory: ${{ matrix.module }}
+        # Pinned rather than @latest: this tool decides whether the build fails,
+        # so an upstream release changing its behaviour should be a deliberate
+        # bump here, not a surprise on an unrelated pull request. The
+        # vulnerability *database* is still fetched live, which is the part that
+        # genuinely needs to be current.
         run: |
-          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   lint:
     name: golangci-lint (${{ matrix.module }})

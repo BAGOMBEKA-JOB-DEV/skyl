@@ -1,5 +1,9 @@
 # skyl
 
+[![CI](https://github.com/BAGOMBEKA-JOB-DEV/skyl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BAGOMBEKA-JOB-DEV/skyl/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/BAGOMBEKA-JOB-DEV/skyl.svg)](https://pkg.go.dev/github.com/BAGOMBEKA-JOB-DEV/skyl)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 **One Go interface for every AI model.**
 
 skyl is a small, dependency-light Go library that lets you talk to Claude, GPT,

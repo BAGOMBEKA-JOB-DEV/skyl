@@ -179,7 +179,12 @@ These cannot be committed — they live in the repository's GitHub settings:
 2. **Enable private vulnerability reporting** (Settings → Security), which is
    the channel `SECURITY.md` tells people to use.
 3. **Enable Dependabot alerts and security updates.**
-4. After the first Scorecard run, add its badge to `README.md`.
+4. After the first Scorecard run has **published results**, add its badge to
+   `README.md`. Checked 2026-08-05: `api.scorecard.dev` currently renders
+   *"invalid repo path"* for this repository, so adding the badge now would
+   publish a broken one. The CI, Go Reference and licence badges are in place.
+   Go Report Card is deliberately absent — the service is retired and its badge
+   now reads *"retired"*.
 
 ## Phase 3 — original scope
 
