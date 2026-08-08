@@ -46,6 +46,46 @@ chi nor the Anthropic SDK, and the core module has zero external dependencies.
 See [ADR-0003](adr/0003-gateway-as-separate-module.md) and
 [ADR-0006](adr/0006-anthropic-adapter-is-its-own-module.md).
 
+The tree above shows where files sit. What matters more is which way the
+dependency arrows point — every heavy dependency is quarantined in a module you
+only pay for by importing it:
+
+```mermaid
+flowchart TD
+    subgraph zero["module: skyl — zero external dependencies"]
+        core["core library<br/>Client · Provider · Message · retry"]
+        openai["provider/openai"]
+        gemini["provider/gemini"]
+        compat["provider/openaicompat"]
+    end
+
+    subgraph paid["separate modules — you pay only if you import them"]
+        anthropic["provider/anthropic<br/>+ anthropic-sdk-go<br/>ADR-0006"]
+        gw["gateway<br/>+ go-chi<br/>ADR-0003"]
+        otel["otel<br/>+ OpenTelemetry<br/>ADR-0007"]
+    end
+
+    openai --> core
+    gemini --> core
+    compat --> core
+    anthropic --> core
+    otel --> core
+    gw --> core
+    gw --> anthropic
+
+    style zero fill:transparent,stroke:#2d7,stroke-width:2px
+    style paid fill:transparent,stroke:#888,stroke-dasharray:4 3
+```
+
+Arrows point at what a module depends on. Nothing points *out* of the green
+box, which is the property the split exists to protect: adding a vendor SDK to
+`provider/anthropic` can never make the core library heavier.
+
+The three adapters inside the green box are there because they need nothing but
+`net/http` — they speak their vendors' wire protocols directly. `anthropic` is
+outside it only because the official SDK is worth its weight for that one
+provider.
+
 ## The seam
 
 Everything in skyl exists to serve one interface:
@@ -76,20 +116,29 @@ Keeping those in `Client` rather than in each adapter means:
 - A new adapter gets production-grade behaviour for free.
 - Users who want raw access can call the `Provider` directly.
 
+```mermaid
+flowchart TD
+    app["your code"] --> client
+
+    subgraph client["skyl.Client — written once, tested once"]
+        direction LR
+        v["validate"] --> t["timeout"] --> r["retry / backoff"] --> h["hooks"]
+    end
+
+    client --> seam{{"skyl.Provider — the seam, four methods"}}
+
+    seam --> a["anthropic"] --> aa(["api.anthropic.com"])
+    seam --> o["openai"] --> oo(["api.openai.com"])
+    seam --> g["gemini"] --> gg(["generativelanguage.googleapis.com"])
+    seam --> c["openaicompat"] --> cc(["any OpenAI-shaped host"])
+
+    style seam stroke-dasharray:5 4
 ```
-   your code
-       │
-       ▼
-   skyl.Client ─── validation ── retry/backoff ── hooks ── timeout
-       │
-       ▼
-   skyl.Provider  (interface)
-       │
-       ├── anthropic.Provider  ──► api.anthropic.com
-       ├── openai.Provider     ──► api.openai.com
-       ├── gemini.Provider     ──► generativelanguage.googleapis.com
-       └── openaicompat.Provider ──► any OpenAI-shaped host
-```
+
+Read it top to bottom: everything above the dashed seam happens once, for every
+provider. Everything below it is translation and nothing else. An adapter that
+tried to implement its own retry would be duplicating the band above it — which
+is why `Provider` has four methods and no hooks of its own.
 
 ## The conversation model
 
@@ -169,6 +218,40 @@ abandon early: `Close()` releases the HTTP body, and the reader goroutine is
 tied to the request context, so **no stream can leak**. This is enforced by a
 goroutine-leak test, not just by convention.
 
+Four event types, and one of them is terminal. The shape below is identical
+whichever provider answered — normalising three different vendor event
+vocabularies into this sequence is most of what a streaming adapter does:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant You as your loop
+    participant S as Stream
+    participant A as adapter
+    participant P as provider
+
+    You->>S: Next()
+    S->>A: read next SSE frame
+    A->>P: (HTTP body, already open)
+
+    loop until a terminal event
+        P-->>A: vendor-specific frame
+        A-->>S: EventTextDelta / EventThinkingDelta / EventToolCall
+        S-->>You: true — Event() has the fragment
+    end
+
+    P-->>A: final frame
+    A-->>S: EventDone (Usage, StopReason)
+    S-->>You: true — then Next() returns false
+
+    Note over You,S: Err() distinguishes clean end from failure.<br/>No EventDone and Err() == nil means a truncated stream.
+```
+
+That last note is the case worth designing for. A stream can end *without*
+`EventDone` — the connection dropped mid-generation — and `Next()` returning
+false does not by itself tell you which happened. Always check `Err()`, and
+treat "no `EventDone`" as truncation rather than success.
+
 ## Retry
 
 `Client` retries idempotent failures with exponential backoff and full jitter,
@@ -181,6 +264,42 @@ these burns quota to get the same answer.
 Backoff is `min(base * 2^n, max)` with full jitter. Jitter is not optional: a
 fleet that retries on a fixed schedule reconverges into a thundering herd
 against a provider that is already struggling.
+
+The decision in full. Note how many paths lead to *give up* — the conservative
+default is the point, because a library that retries hard turns a provider's bad
+minute into its bad hour:
+
+```mermaid
+flowchart TD
+    err(["attempt returns an error"]) --> ctx{"context cancelled<br/>or deadline passed?"}
+    ctx -->|yes| stop["give up<br/>the caller stopped waiting"]
+    ctx -->|no| cert{"TLS certificate<br/>rejected?"}
+    cert -->|yes| stop2["give up<br/>a misconfiguration, not a blip:<br/>the next three attempts fail identically"]
+    cert -->|no| kind{"which error?"}
+
+    kind -->|"ErrAuth · ErrBadRequest<br/>ErrNotFound · ErrRefusal"| stop3["give up<br/>retrying spends quota<br/>to receive the same answer"]
+    kind -->|"ErrRateLimit · ErrServer<br/>transport error"| budget{"attempts left?<br/>default 3"}
+
+    budget -->|no| stop4["give up<br/>return the last error"]
+    budget -->|yes| hint{"Retry-After<br/>header present?"}
+
+    hint -->|yes| cap["wait min(hint, 5m)<br/>a rate-limit window is typically 60s,<br/>so this cap is far above maxDelay"]
+    hint -->|no| back["wait min(500ms × 2ⁿ, 30s)<br/>with full jitter"]
+
+    cap --> again(["try again"])
+    back --> again
+
+    style stop fill:transparent
+    style stop2 fill:transparent
+    style stop3 fill:transparent
+    style stop4 fill:transparent
+```
+
+The two caps answer different questions and so are configured separately:
+`maxDelay` is how long *we choose* to wait; `retryAfterCap` is how long we let a
+*provider* make us wait. Clamping a provider's 60-second hint down to the
+30-second jitter ceiling would retry inside a window it has already told us is
+closed, spending the entire retry budget collecting the same 429 four times.
 
 ## Concurrency
 

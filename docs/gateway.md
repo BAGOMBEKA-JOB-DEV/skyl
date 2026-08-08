@@ -218,6 +218,44 @@ severed mid-generation.
 Everything below was verified against a running binary, not inferred from the
 code.
 
+### What a request actually does
+
+```mermaid
+flowchart TD
+    c(["client"]) --> route{"path"}
+
+    route -->|"GET /healthz"| hz(["200 — always,<br/>even while draining"])
+    route -->|"GET /readyz"| rz(["200, or 503<br/>once draining"])
+    route -->|"GET /metrics"| mx(["Prometheus exposition"])
+    route -->|"/v1/*"| auth
+
+    subgraph auth["authenticated group"]
+        direction TB
+        a{"Authorization: Bearer …<br/>matches a configured token?"}
+        a -->|no| e401(["401"])
+        a -->|yes| thr["throttle to SKYL_MAX_CONCURRENT"]
+        thr --> ep{"endpoint"}
+        ep -->|"GET /providers<br/>GET /models"| meta(["configured providers"])
+        ep -->|"POST /chat<br/>POST /chat/stream"| pick["pick provider:<br/>?provider= or SKYL_DEFAULT_PROVIDER"]
+    end
+
+    pick --> lib["skyl.Client — validate · retry · timeout"]
+    lib --> up(["the vendor API"])
+
+    style e401 fill:transparent
+    style auth stroke-dasharray:4 3
+```
+
+Two orderings in there are deliberate:
+
+- **The probes and `/metrics` sit outside the authenticated group.** A probe
+  that needed a credential would fail closed during exactly the incident you
+  need it to answer, and the metrics carry no prompt content — only counts,
+  durations, and provider labels.
+- **The concurrency limit sits inside it.** Throttling before authenticating
+  would let unauthenticated traffic consume the budget, which is a free denial
+  of service.
+
 ### Probes: `/healthz` and `/readyz` are not the same question
 
 | | `/healthz` | `/readyz` |
@@ -238,6 +276,37 @@ gateway unready — there is nothing useful to fail over to, and flapping
 readiness on a provider blip would take the whole fleet out of rotation.
 
 ### Shutdown, step by step
+
+The whole sequence, drawn against a clock. The number that matters is the one at
+the bottom:
+
+```mermaid
+flowchart TD
+    sig(["SIGTERM or SIGINT"]) --> t0
+
+    t0["<b>0s</b> — logs 'draining'<br/>/readyz → 503 immediately<br/>/healthz stays 200"]
+    t0 --> t1["<b>0–2s</b> — drainDelay<br/>listener still open, still accepting<br/>the window for your load balancer to notice"]
+    t1 --> t2["<b>2s</b> — logs 'shutting down'<br/>listener closes<br/>in-flight requests continue"]
+    t2 --> t3["<b>2–32s</b> — shutdownGrace, 30s<br/>waiting for in-flight work"]
+
+    t3 --> done{"all requests<br/>finished?"}
+    done -->|yes| ok["logs 'shutdown complete'<br/><b>exit 0</b>"]
+    done -->|"no, grace expired"| warn["logs WARN: 'grace period expired<br/>with requests still in flight'<br/>streams force-closed<br/><b>exit 0 anyway</b>"]
+
+    warn -.->|"alert on this line —<br/>the exit code will not tell you"| ok
+
+    style t0 fill:transparent
+    style warn stroke-dasharray:4 3
+```
+
+**Worst case ≈ 32 seconds**, which is where
+`terminationGracePeriodSeconds: 40` comes from — see the
+[Kubernetes side of this](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure/blob/main/docs/runbook.md).
+
+Note the dashed arrow. Both paths exit 0, deliberately, so that a long
+generation during a deploy does not look like a crash in your dashboards. The
+consequence is that force-closed streams are invisible to exit-code and
+restart-count alerting, and the WARN line is the only signal.
 
 On `SIGTERM` or `SIGINT`:
 
