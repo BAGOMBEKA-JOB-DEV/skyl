@@ -13,15 +13,35 @@ which covers where prompts go.
 
 ## Trust boundaries
 
+```mermaid
+flowchart LR
+    subgraph trusted["your trust domain"]
+        app["your code"]
+        lib["skyl library<br/>holds the API key in memory"]
+        gw["gateway<br/>holds every provider key"]
+    end
+
+    subgraph remote["outside your control"]
+        pa(["provider API"])
+        pb(["provider API"])
+    end
+
+    client(["gateway client<br/>holds only a bearer token"])
+
+    app -->|"<b>B1</b><br/>caller is trusted;<br/>no sanitisation"| lib
+    lib -->|"<b>B2</b><br/>TLS, verification<br/>not disableable"| pa
+    client -->|"<b>B3</b><br/>constant-time<br/>bearer auth"| gw
+    gw -->|"<b>B4</b><br/>TLS"| pb
+
+    style trusted stroke-dasharray:5 4
+    style remote stroke-dasharray:5 4
 ```
-   your code
-       │  B1
-       ▼
-   skyl library ───── B2 ────▶ provider API
-       ▲
-       │  B3
-   gateway client ─── B4 ────▶ provider API
-```
+
+The asymmetry across B3 is the whole reason the gateway exists: the client on
+its left holds a token you can revoke in one place, while the gateway on its
+right holds credentials that cost money and cannot be revoked without touching
+every vendor console. Everything in the dashed box on the left is yours to
+protect; everything in the right-hand box is somebody else's runtime.
 
 ### B1 — your code → the library
 

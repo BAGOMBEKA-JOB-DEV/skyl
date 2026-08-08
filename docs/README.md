@@ -11,6 +11,7 @@ Start with **[idea.md](idea.md)** for why skyl exists, or
 | [getting-started.md](getting-started.md) | You want working code: install, first call, streaming, tools, errors |
 | [providers.md](providers.md) | You need to know which providers and models are reachable, and how discovery works |
 | [gateway.md](gateway.md) | You want to expose skyl over HTTP |
+| [skyl_infrastructure ↗](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure) | You want to run the gateway on Kubernetes — Terraform for AWS, GCP or Azure, and a Helm chart. Separate repository |
 | [sandbox.md](sandbox.md) | You want to develop or test without credentials, or to force provider failures |
 | [validating.md](validating.md) | You have provider keys and want to close the live-validation gap |
 | [architecture.md](architecture.md) | You are contributing, or want to know why it is built this way |

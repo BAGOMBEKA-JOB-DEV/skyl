@@ -117,6 +117,52 @@ Importing the core library never pulls in chi. See
 **[docs/gateway.md](docs/gateway.md)** and
 [ADR-0003](docs/adr/0003-gateway-as-separate-module.md).
 
+## Deploying it
+
+The gateway builds as a multi-architecture container image —
+`gcr.io/distroless/static:nonroot`, no shell, configuration entirely from the
+environment. Build and run it from a clone:
+
+```bash
+docker build -t skyl-gateway .
+docker run --rm -p 8080:8080 \
+  -e SKYL_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  skyl-gateway
+```
+
+Or with no API key at all — `docker compose up --build` runs it against the
+local [sandbox](docs/sandbox.md), which speaks every provider's wire protocol.
+
+`.github/workflows/publish-image.yml` publishes to
+`ghcr.io/bagombeka-job-dev/skyl-gateway` on each `gateway/v*` tag, signed with
+cosign and carrying an SBOM and a build-provenance attestation. **No image has
+been published yet** — the workflow postdates the existing `gateway/v0.1.0` tag,
+so it has not had a tag push to run on. Trigger it manually from the Actions tab,
+or on the next release.
+
+For a cluster,
+**[BAGOMBEKA-JOB-DEV/skyl_infrastructure](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure)**
+is a separate repository holding Terraform that stands up **AWS, GCP or Azure**
+behind one interface, and a Helm chart that runs identically on all three. It
+encodes the operational details that are easy to get wrong and expensive to
+discover in production — liveness on `/healthz` and readiness on `/readyz`, a
+40-second termination grace period for the drain described in
+[docs/gateway.md](docs/gateway.md), secrets from the cloud's own secret store
+rather than from git, and images pinned by digest so a rollback lands on the
+bytes that were signed.
+
+Deployment lives in its own repository for the same reason the docs site does:
+so that infrastructure changes never touch this repository's release history.
+
+## The three repositories
+
+| Repository | What it is |
+|---|---|
+| **[skyl](https://github.com/BAGOMBEKA-JOB-DEV/skyl)** | This one — the Go library, the adapters, and the gateway |
+| [skyl_docs](https://github.com/BAGOMBEKA-JOB-DEV/skyl_docs) | The [documentation site](https://skyl-docs.vercel.app/) (Next.js) |
+| [skyl_infrastructure](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure) | Deployment: Terraform for three clouds, the Helm chart, CI |
+
 ## Documentation
 
 The **[documentation site](https://skyl-docs.vercel.app/)** is the friendliest
@@ -149,6 +195,11 @@ versioned with the code they describe.
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to propose and land a change |
 | [SECURITY.md](SECURITY.md) | Reporting vulnerabilities; credential handling |
+
+Deployment is documented in the infrastructure repository rather than here:
+[architecture and quickstart](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure#readme),
+the [cluster runbook](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure/blob/main/docs/runbook.md),
+and [what each cloud costs](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure/blob/main/docs/cost.md).
 
 ## Status
 
