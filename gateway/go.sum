@@ -4,8 +4,8 @@ github.com/BAGOMBEKA-JOB-DEV/skyl/otel v0.1.0 h1:0smLBT807FgxYMp1RV+04xDEqyR+YDK
 github.com/BAGOMBEKA-JOB-DEV/skyl/otel v0.1.0/go.mod h1:vezpDP5igpjuSAUZ7DV4SbdQvi3ylvBaSFrELQVu4wo=
 github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic v0.1.0 h1:UTpkuDPhC8fVKmlrYfjTWabw+VxhGAU59UwITyQjDaI=
 github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic v0.1.0/go.mod h1:8aH+0CaX3N0XrIN7vjqLoonow8XgGukWPF5DJA/oDJA=
-github.com/anthropics/anthropic-sdk-go v1.61.0 h1:JRTnm1tPqn5xo1xd1zfrcFDlcoWXVMvV1K68YmhpZKw=
-github.com/anthropics/anthropic-sdk-go v1.61.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
+github.com/anthropics/anthropic-sdk-go v1.66.0 h1:/CKwgscn0Pe1q4U8aFInSOt/v06JeMc9Aq4vIlctCFw=
+github.com/anthropics/anthropic-sdk-go v1.66.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
