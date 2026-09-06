@@ -27,7 +27,17 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository_owner }}/skyl-gateway
+  # NOT ghcr.io/${{ github.repository_owner }}/… — that expands to
+  # BAGOMBEKA-JOB-DEV, and an OCI reference name must be lowercase. It is
+  # written out here rather than lowercased at runtime so the value is visible
+  # in the workflow and cannot drift between steps.
+  #
+  # This bit at v1.0.0. `docker/metadata-action` lowercases its own tag outputs,
+  # so `build and push` succeeded and the image published normally — then every
+  # step using the raw variable failed with "could not parse reference", and the
+  # release shipped unsigned and unattested. The build working is exactly what
+  # made it hard to spot.
+  IMAGE: ghcr.io/bagombeka-job-dev/skyl-gateway
 
 jobs:
   publish:
@@ -43,6 +53,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+
+      # Fail here rather than three steps later. The build step lowercases its
+      # own tags, so an uppercase IMAGE produces a perfectly good image and only
+      # then breaks signing — leaving a published, unsigned artefact, which is
+      # the worst of both outcomes.
+      - name: image reference must be lowercase
+        run: |
+          if [ "$IMAGE" != "$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "::error::IMAGE contains uppercase characters: $IMAGE"
+            echo "OCI reference names must be lowercase; cosign will refuse to parse this."
+            exit 1
+          fi
+          echo "ok: $IMAGE"
+        env:
+          IMAGE: ${{ env.IMAGE }}
 
       # arm64 matters more than it looks: Graviton and Ampere node pools are
       # the cheap tier on all three clouds skyl_infrastructure targets, and an
