@@ -1,6 +1,6 @@
 module github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/BAGOMBEKA-JOB-DEV/skyl v1.0.0
@@ -18,5 +18,5 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/sync v0.16.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 )
