@@ -81,18 +81,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The tag is `gateway/v0.1.0`; a Docker tag cannot contain a slash. The
-      # `match` pattern strips the module prefix so the image is tagged
-      # `0.1.0`, `0.1`, `0` — not `gateway/v0.1.0`, which would be rejected.
+      # Resolve the version from ONE source, whichever trigger fired.
+      #
+      # `type=match` patterns in metadata-action are evaluated against
+      # `github.ref`, which on a workflow_dispatch is `refs/heads/main` — not the
+      # tag being built. So a dispatched run derived no tags at all and buildx
+      # failed with "tag is needed when pushing to registry", even though the
+      # checkout above had the right ref. The version is computed here instead
+      # and passed as literal values, so both triggers take one path.
+      - name: resolve version
+        id: ver
+        run: |
+          ref="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          case "$ref" in
+            gateway/v*) v="${ref#gateway/v}" ;;
+            *) echo "::error::expected a gateway/vX.Y.Z tag, got '$ref'"; exit 1 ;;
+          esac
+          if ! printf '%s' "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$v' is not X.Y.Z"; exit 1
+          fi
+          {
+            echo "version=$v"
+            echo "minor=${v%.*}"
+            echo "major=${v%%.*}"
+          } >> "$GITHUB_OUTPUT"
+          echo "building $v"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+
+      # A Docker tag cannot contain a slash, so the module prefix is stripped
+      # above: the image is tagged `1.0.0`, `1.0`, `1` — never `gateway/v1.0.0`.
       - name: derive tags
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=match,pattern=gateway/v(.*),group=1
-            type=match,pattern=gateway/v(\d+\.\d+),group=1
-            type=match,pattern=gateway/v(\d+),group=1
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=${{ steps.ver.outputs.minor }}
+            type=raw,value=${{ steps.ver.outputs.major }}
+            type=raw,value=latest
           labels: |
             org.opencontainers.image.title=skyl-gateway
             org.opencontainers.image.description=One authenticated endpoint fanning out to every model provider
