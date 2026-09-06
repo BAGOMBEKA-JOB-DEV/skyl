@@ -85,12 +85,21 @@ The provider-agnostic types and the client that drives them.
       [benchmarks.md](benchmarks.md)
 - [x] Fuzz tests on the SSE reader — `FuzzReader`, run weekly in CI
 
-### M7 — v1.0.0
+### M7 — v1.0.0 ✅ 2026-09-06
 
-- [ ] API frozen and reviewed
+- [x] API frozen and reviewed
 - [x] Every adapter validated against live APIs (2026-08-05)
-- [ ] Documentation complete, all examples compiling
-- [ ] Semantic-versioning commitment published
+- [x] Documentation complete, all examples compiling
+- [x] Semantic-versioning commitment published — `CHANGELOG.md`, `RELEASING.md`
+      and [rules.md §1.2](rules.md): no breaking change to exported API without
+      a major version
+
+Shipped as four tags — `v1.0.0`, `provider/anthropic/v1.0.0`, `otel/v1.0.0`,
+`gateway/v1.0.0` — with a signed, multi-arch container image for the gateway.
+
+The milestone is the API commitment, not feature completeness. What remains
+deferred is listed in [roadmap.md](roadmap.md) and is all additive, which is
+exactly why freezing now costs nothing later.
 
 ## Under consideration
 

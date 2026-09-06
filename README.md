@@ -134,12 +134,19 @@ docker run --rm -p 8080:8080 \
 Or with no API key at all — `docker compose up --build` runs it against the
 local [sandbox](docs/sandbox.md), which speaks every provider's wire protocol.
 
-`.github/workflows/publish-image.yml` publishes to
-`ghcr.io/bagombeka-job-dev/skyl-gateway` on each `gateway/v*` tag, signed with
-cosign and carrying an SBOM and a build-provenance attestation. **No image has
-been published yet** — the workflow postdates the existing `gateway/v0.1.0` tag,
-so it has not had a tag push to run on. Trigger it manually from the Actions tab,
-or on the next release.
+Released images are published to
+[`ghcr.io/bagombeka-job-dev/skyl-gateway`](https://github.com/BAGOMBEKA-JOB-DEV/skyl/pkgs/container/skyl-gateway)
+on each `gateway/v*` tag — multi-architecture, signed with cosign, and carrying
+an SBOM and a build-provenance attestation.
+
+```bash
+cosign verify ghcr.io/bagombeka-job-dev/skyl-gateway:1.0.0 \
+  --certificate-identity-regexp '^https://github.com/BAGOMBEKA-JOB-DEV/skyl/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Deploy by digest rather than by tag: a tag is a mutable pointer, so pinning one
+makes a rollback a guess about which bytes it lands on.
 
 For a cluster,
 **[BAGOMBEKA-JOB-DEV/skyl_infrastructure](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastructure)**
@@ -203,7 +210,7 @@ and [what each cloud costs](https://github.com/BAGOMBEKA-JOB-DEV/skyl_infrastruc
 
 ## Status
 
-**Pre-v1, and validated against live provider APIs.** Everything here is
+**v1.0.0 — released 2026-09-06. The API is stable.** Everything here is
 implemented, unit-tested, contract-tested, exercised end to end over real
 sockets, and CI-green — and as of **2026-08-05** the integration suite has been
 run against the real OpenAI, Anthropic and Gemini endpoints and passes.
@@ -215,9 +222,19 @@ regardless. Only a real call settles it, and one has now been made against each
 adapter: completions, streaming, tool calls, the multi-turn tool round trip,
 truncation, and error classification.
 
-**Pre-v1 still means what it says.** The wire mapping is confirmed; the Go API
-is not frozen and may change before `v1.0.0` (`docs/rules.md` §1.2). Live
-validation is a snapshot, not a subscription — providers change, and
+**What v1.0.0 promises, and what it does not.** It promises the exported API:
+`Provider`, `Client`, `Message`, `Part`, `Request`, `Response`, `Stream`, the
+error sentinels and every functional option are frozen, and none of them changes
+without a v2 (`docs/rules.md` §1.2). Upgrading from v0.1.0 breaks nothing.
+
+It does not promise complete provider coverage. The
+[feature matrix](docs/feature-matrix.md) still lists what each adapter silently
+ignores, and [docs/roadmap.md](docs/roadmap.md) still lists what is deliberately
+deferred — embeddings, prompt-caching control, batch APIs, token counting,
+failover. A frozen API and a finished feature surface are different claims, and
+only the first is being made.
+
+Nor is live validation a subscription. It is a snapshot: providers change, and
 [docs/validating.md](docs/validating.md) is how you re-run it yourself against
 your own account and models.
 
@@ -250,9 +267,8 @@ speaks all four providers' wire protocols and costs nothing. See
 go run ./cmd/skyl-sandbox
 ```
 
-The API may also change ahead of the v1.0.0 tag. See
-[docs/project-plan.md](docs/project-plan.md) for what is done and what is next,
-and [CHANGELOG.md](CHANGELOG.md) for release history.
+See [docs/project-plan.md](docs/project-plan.md) for what is done and what is
+next, and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

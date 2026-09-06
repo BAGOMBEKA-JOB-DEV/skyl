@@ -96,7 +96,12 @@ not help: the proxy has already cached the original content and will keep
 serving it. A broken release is fixed forward with a new patch version, never by
 retagging.
 
-## Pre-v1
+## After v1.0.0
 
-Until `v1.0.0`, breaking changes may land in a minor release, and every one is
-listed in `CHANGELOG.md` with a migration note. See `docs/rules.md` §1.2.
+The exported API is frozen. A breaking change needs a **major** version, which
+for a Go module means a new import path — `.../skyl/v2` — and a `/v2` directory
+or branch. That cost is the point: it makes breaking a deliberate act rather
+than an oversight.
+
+Everything additive is a minor release; a fix is a patch. Both are listed in
+`CHANGELOG.md`. See `docs/rules.md` §1.2.

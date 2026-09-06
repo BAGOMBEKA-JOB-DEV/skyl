@@ -114,4 +114,5 @@ belongs to the caller, who is the only party that knows what the data is for.
   `Part` set is closed and documented as closed; widening it breaks every
   exhaustive type switch outside this repository. A `Response.Unmarshal` helper
   was also considered and deferred: it saves one line, and every exported symbol
-  added before v1.0.0 is one more thing frozen at it.
+  added before v1.0.0 is one more thing frozen at it. It was frozen at v1.0.0
+  without either, which is the outcome that ADR wanted.

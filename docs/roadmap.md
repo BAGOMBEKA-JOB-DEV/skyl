@@ -325,8 +325,22 @@ removed the thing it was escaping from.
 - A contract check and a ninth live check, so no adapter can regress behind another's
   tests and a real provider's own schema validation is exercised.
 
-**Remaining:** nothing in this phase. The API addition means it should land after the
-`v0.1.0` tags rather than before them.
+**Remaining:** nothing in this phase. The API addition landed after the `v0.1.0` tags
+and shipped in `v1.0.0`.
+
+## Phase 7 — v1.0.0 ✅ 2026-09-06
+
+The API is frozen. `Provider`, `Client`, `Message`, `Part`, `Request`, `Response`,
+`Stream`, the error sentinels and every functional option are stable: no breaking change
+without a major version, which for a Go module means a new import path.
+
+Four tags — `v1.0.0`, `provider/anthropic/v1.0.0`, `otel/v1.0.0`, `gateway/v1.0.0` — plus
+the gateway's first published container image, signed and attested.
+
+Nothing broke between `v0.1.0` and here, so upgrading is a version bump with no migration.
+
+**What this milestone is not.** It is a commitment about the *interface*, not a claim of
+completeness. Everything below this line is still outstanding and still says so.
 
 ## Deferred, deliberately
 

@@ -5,10 +5,27 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Until v1.0.0, breaking changes may land in minor releases. They will always be
-listed here with a migration note.
+Since v1.0.0 the exported API is stable: no breaking change without a major
+version bump, and every one will be listed here with a migration note.
 
 ## [Unreleased]
+
+## [1.0.0] — 2026-09-06
+
+**The exported API is now stable.** `Provider`, `Client`, `Message`, `Part`,
+`Request`, `Response`, `Stream`, the error sentinels and every functional option
+are frozen: no breaking change to any of them without a v2, per
+[rules.md §1.2](docs/rules.md).
+
+Nothing in this release breaks v0.1.0. Everything below is additive, so there is
+no migration to perform — upgrading is a version bump.
+
+What v1.0.0 does **not** claim is that every provider feature is covered. The
+[feature matrix](docs/feature-matrix.md) still lists what each adapter silently
+ignores, and [roadmap.md](docs/roadmap.md) still lists what is deliberately
+deferred. Freezing the API and finishing the feature surface are different
+things, and only the first has happened.
+
 
 ### Added
 
@@ -329,5 +346,6 @@ release, so neither ever shipped.
   not pull in a router.
   ([ADR-0003](docs/adr/0003-gateway-as-separate-module.md))
 
-[Unreleased]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/BAGOMBEKA-JOB-DEV/skyl/releases/tag/v0.1.0
