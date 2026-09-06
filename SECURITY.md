@@ -29,8 +29,11 @@ right — you are not bound by an embargo nobody is upholding.
 
 ## Supported versions
 
-skyl is pre-v1. Fixes land on `main` and in the next release. Once v1.0.0 ships,
-this section will state a support window.
+Security fixes land on `main` and in the next release, and are backported to the
+current minor series as a patch.
+
+**Supported: v1.x.** v0.1.0 is superseded and receives nothing — upgrading to
+v1.x breaks no API, so there is no cost to moving off it.
 
 ## How skyl handles credentials
 

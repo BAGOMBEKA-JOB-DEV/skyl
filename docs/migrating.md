@@ -211,6 +211,7 @@ list. If something you depend on is in it, better to know now.
 
 And read the [status section of the README](../README.md#status). Every adapter
 has been exercised against its live provider API as of 2026-08-05, so the wire
-mapping is confirmed rather than merely self-consistent. The project is still
-pre-v1 and the Go API may change before `v1.0.0` — that is the part that should
-factor into your decision now.
+mapping is confirmed rather than merely self-consistent. Since **v1.0.0** the Go
+API is frozen, so what you port to today is what you keep — the thing that
+should factor into your decision now is the coverage in that list above, not the
+risk of the interface moving underneath you.
