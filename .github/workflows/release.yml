@@ -40,7 +40,7 @@ jobs:
       # what somebody auditing a release actually wants — the alternative is
       # four partial documents that have to be reconciled by hand.
       - name: generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           format: spdx-json
           output-file: skyl.spdx.json
