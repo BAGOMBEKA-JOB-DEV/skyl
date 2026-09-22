@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/BAGOMBEKA-JOB-DEV/skyl v1.0.0
-	github.com/anthropics/anthropic-sdk-go v1.72.0
+	github.com/anthropics/anthropic-sdk-go v1.74.0
 )
 
 require (
