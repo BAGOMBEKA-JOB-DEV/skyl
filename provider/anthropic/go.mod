@@ -1,6 +1,6 @@
 module github.com/BAGOMBEKA-JOB-DEV/skyl/provider/anthropic
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/BAGOMBEKA-JOB-DEV/skyl v1.0.0
@@ -13,6 +13,7 @@ require (
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
+	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
