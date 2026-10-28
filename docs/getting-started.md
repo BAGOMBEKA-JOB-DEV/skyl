@@ -138,6 +138,69 @@ Always `defer stream.Close()`. Abandoning a stream early is safe — `Close()`
 releases the connection, and the reader is bound to the request context — but
 closing is what makes it prompt rather than eventual.
 
+### Streaming from Gemini
+
+The pattern above is provider-agnostic; for Gemini you swap in the
+`provider/gemini` adapter. It ships in the same module, so the one install step
+covers it:
+
+```bash
+go get github.com/BAGOMBEKA-JOB-DEV/skyl
+```
+
+Export a key from [Google AI Studio](https://aistudio.google.com/apikey) and
+point the adapter at it (on Windows PowerShell use `$env:GEMINI_API_KEY`):
+
+```bash
+export GEMINI_API_KEY="..."
+```
+
+```go
+import (
+	"github.com/BAGOMBEKA-JOB-DEV/skyl"
+	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/gemini"
+)
+
+client := skyl.New(gemini.New(os.Getenv("GEMINI_API_KEY")))
+
+stream, err := client.Stream(ctx, &skyl.Request{
+	Model:     "gemini-3.6-flash",
+	MaxTokens: 512,
+	Messages:  []skyl.Message{skyl.UserText("Explain Go channels in one sentence.")},
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer stream.Close()
+
+for stream.Next() {
+	if ev := stream.Event(); ev.Type == skyl.EventTextDelta {
+		fmt.Print(ev.Text)
+	}
+}
+if err := stream.Err(); err != nil {
+	log.Fatal(err)
+}
+```
+
+**Keeping the key safe.** Read it from the environment (or your own secret
+store) — never hard-code it and never commit it. `gemini.New` sends the key in
+the `x-goog-api-key` header rather than the URL, so it stays out of proxy and
+server access logs, and skyl never puts credentials in an error or a log line.
+If a key leaks, rotate it in Google AI Studio.
+
+**Expected output.** The reply streams as incremental text deltas, so the
+sentence appears word by word and the loop prints something like:
+
+```
+Go channels let goroutines communicate by passing values, which synchronises them without shared memory.
+```
+
+The exact wording varies between calls — this is a live model, not a fixture.
+A compilable version of this example lives in `example_test.go`
+(`ExampleClient_Stream_gemini`); `go test` builds it, then skips it at run time
+because it needs a credential.
+
 ## Tool calling
 
 ```go
