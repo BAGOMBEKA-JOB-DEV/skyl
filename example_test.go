@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/BAGOMBEKA-JOB-DEV/skyl"
+	"github.com/BAGOMBEKA-JOB-DEV/skyl/provider/gemini"
 )
 
 // fakeProvider is a stand-in for an adapter, so the examples below are
@@ -382,4 +383,40 @@ func ExampleClient_Complete_production() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_ = ctx
+}
+
+// Streaming a Gemini response is the same pull iterator as every other
+// provider — only the constructor changes. The key is read from the
+// environment so it never lives in source; gemini.New sends it as the
+// x-goog-api-key header, which keeps it out of URLs and access logs.
+//
+// This example needs a real credential, so it is compiled but not run.
+func ExampleClient_Stream_gemini() {
+	key := os.Getenv("GEMINI_API_KEY")
+	if key == "" {
+		return
+	}
+
+	client := skyl.New(gemini.New(key))
+
+	stream, err := client.Stream(context.Background(), &skyl.Request{
+		Model:     "gemini-3.6-flash",
+		MaxTokens: 512,
+		Messages:  []skyl.Message{skyl.UserText("Explain Go channels in one sentence.")},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stream.Close()
+
+	for stream.Next() {
+		if ev := stream.Event(); ev.Type == skyl.EventTextDelta {
+			fmt.Print(ev.Text)
+		}
+	}
+	fmt.Println()
+
+	if err := stream.Err(); err != nil {
+		log.Fatal(err)
+	}
 }
