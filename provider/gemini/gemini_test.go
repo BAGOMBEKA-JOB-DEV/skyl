@@ -297,20 +297,37 @@ func TestErrorClassification(t *testing.T) {
 func TestModels(t *testing.T) {
 	t.Parallel()
 
-	p := newTestProvider(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"models":[
-			{"name":"models/gemini-3.6-flash","displayName":"Gemini 3.6 Flash",
-			 "inputTokenLimit":1048576,"outputTokenLimit":65536},
-			{"name":"models/gemini-3-pro"}
-		]}`)
+	var pages []string
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("pageToken")
+		pages = append(pages, token)
+		if token == "" {
+			_, _ = io.WriteString(w, `{"models":[
+				{"name":"models/gemini-3.6-flash","displayName":"Gemini 3.6 Flash",
+				 "inputTokenLimit":1048576,"outputTokenLimit":65536},
+				{"name":"models/gemini-3-pro"}
+			],"nextPageToken":"page-2"}`)
+			return
+		}
+		if token == "page-2" {
+			_, _ = io.WriteString(w, `{"models":[{"name":"models/gemini-3.5-flash"}]}`)
+			return
+		}
+		t.Errorf("unexpected pageToken %q", token)
 	})
 
 	models, err := p.Models(context.Background())
 	if err != nil {
 		t.Fatalf("Models() error = %v", err)
 	}
-	if len(models) != 2 {
-		t.Fatalf("got %d models, want 2", len(models))
+	if len(models) != 3 {
+		t.Fatalf("got %d models, want 3 across two pages", len(models))
+	}
+	if len(pages) != 2 || pages[1] != "page-2" {
+		t.Fatalf("page tokens = %v, want the second request to follow nextPageToken", pages)
+	}
+	if models[2].ID != "gemini-3.5-flash" {
+		t.Errorf("second page dropped: last ID = %q", models[2].ID)
 	}
 	// The API returns "models/x"; callers need the bare ID for Request.Model.
 	if models[0].ID != "gemini-3.6-flash" {
