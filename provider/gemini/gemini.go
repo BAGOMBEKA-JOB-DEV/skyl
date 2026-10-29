@@ -427,28 +427,53 @@ func (p *Provider) Complete(ctx context.Context, req *skyl.Request) (*skyl.Respo
 	}, nil
 }
 
-// Models lists the models available to this API key.
+// Models lists the models available to this API key, following
+// nextPageToken until the API reports no further page.
 func (p *Provider) Models(ctx context.Context) ([]skyl.ModelInfo, error) {
-	httpResp, err := httpx.Get(ctx, p.hc, p.baseURL+"/models?pageSize=1000", p.headers())
+	out := make([]skyl.ModelInfo, 0)
+	pageToken := ""
+	for {
+		u := p.baseURL + "/models?pageSize=1000"
+		if pageToken != "" {
+			u += "&pageToken=" + url.QueryEscape(pageToken)
+		}
+		page, next, err := p.modelsPage(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		// A server that echoes the token it just received would loop forever.
+		if next == "" || next == pageToken {
+			return out, nil
+		}
+		pageToken = next
+	}
+}
+
+// modelsPage fetches one page of /models and returns its entries plus the
+// token for the next page, if any.
+func (p *Provider) modelsPage(ctx context.Context, u string) ([]skyl.ModelInfo, string, error) {
+	httpResp, err := httpx.Get(ctx, p.hc, u, p.headers())
 	if err != nil {
-		return nil, p.transportError(err)
+		return nil, "", p.transportError(err)
 	}
 	defer httpResp.Body.Close() //nolint:errcheck // response body close on read path
 
 	if httpResp.StatusCode >= 300 {
-		return nil, p.httpError(httpResp)
+		return nil, "", p.httpError(httpResp)
 	}
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, p.transportError(err)
+		return nil, "", p.transportError(err)
 	}
 
 	var wire struct {
-		Models []json.RawMessage `json:"models"`
+		Models        []json.RawMessage `json:"models"`
+		NextPageToken string            `json:"nextPageToken"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
-		return nil, skyl.NewError(providerName, httpResp.StatusCode, skyl.ErrServer,
+		return nil, "", skyl.NewError(providerName, httpResp.StatusCode, skyl.ErrServer,
 			"malformed models response", body)
 	}
 
@@ -474,7 +499,7 @@ func (p *Provider) Models(ctx context.Context) ([]skyl.ModelInfo, error) {
 			Raw:             entry,
 		})
 	}
-	return out, nil
+	return out, wire.NextPageToken, nil
 }
 
 // ---------------------------------------------------------------------------

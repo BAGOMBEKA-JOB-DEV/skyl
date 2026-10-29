@@ -219,9 +219,6 @@ All four support `Models(ctx)`; none return `ErrUnsupported`.
 | `ContextWindow` | ✅ | ⚠️ empty | host-dependent | ✅ |
 | `MaxOutputTokens` | ✅ | ⚠️ never set | ⚠️ never set | ✅ |
 
-⚠️ Gemini ignores `nextPageToken`; beyond 1000 models the list is silently
-truncated.
-
 ---
 
 ## ProviderOptions — read this before using it
@@ -292,9 +289,8 @@ and does not do it, which is the failure mode that costs you an afternoon.
 4. Non-string entries in a tool's `required` array — anthropic.
 5. `Image.URL` when `Data` is also set — anthropic, gemini. `Image.Data` when
    `URL` is also set — openai, openaicompat.
-6. `nextPageToken` on model listing beyond 1000 entries — gemini.
-7. Streaming tool calls whose `name` never arrived — openai, openaicompat.
-8. Non-`text` blocks in a response content array — openai, openaicompat.
+6. Streaming tool calls whose `name` never arrived — openai, openaicompat.
+7. Non-`text` blocks in a response content array — openai, openaicompat.
 
 **All adapters**
 
